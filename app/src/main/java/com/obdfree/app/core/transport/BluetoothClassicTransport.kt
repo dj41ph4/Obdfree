@@ -49,7 +49,10 @@ class BluetoothClassicTransport(
         val device = adapter.getRemoteDevice(address)
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
 
-        adapter.cancelDiscovery()
+        // OBDfree only connects to an already-paired adapter. Do not call
+        // BluetoothAdapter.cancelDiscovery() here: on Android 12+ that API
+        // requires BLUETOOTH_SCAN, which this minimal paired-device flow does
+        // not need and intentionally does not request.
         newSocket.connect()
         socket = newSocket
     }
