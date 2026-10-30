@@ -26,8 +26,8 @@ jobs:
         with:
           gradle-version: "9.6.0"
 
-      - name: Install Android API 37
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0"
+      - name: Install Android API 36
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
