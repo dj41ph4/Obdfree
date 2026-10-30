@@ -11,8 +11,8 @@ android {
         applicationId = "com.obdfree.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.0.2"
+        versionCode = 3
+        versionName = "0.0.3"
     }
 
     buildFeatures {
@@ -31,7 +31,7 @@ android {
 }
 
 dependencies {
-    // Compose 1.11.x: latest production line before Compose 1.12 began requiring compileSdk 37.
+    // Compose 1.11.x: stable production line compatible with compileSdk 36.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     implementation(composeBom)
