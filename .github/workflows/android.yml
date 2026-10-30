@@ -7,6 +7,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
@@ -36,9 +39,31 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: OBDfree-0.0.2-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Tag and publish OBDfree 0.0.2
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk OBDfree-0.0.2.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags
+          if ! git rev-parse -q --verify "refs/tags/v0.0.2" >/dev/null; then
+            git tag -a v0.0.2 -m "OBDfree 0.0.2"
+            git push origin v0.0.2
+          fi
+          if gh release view v0.0.2 >/dev/null 2>&1; then
+            gh release upload v0.0.2 OBDfree-0.0.2.apk --clobber
+          else
+            gh release create v0.0.2 OBDfree-0.0.2.apk \
+              --title "OBDfree 0.0.2" \
+              --notes "Première version utilisable d’OBDfree : connexion Bluetooth ELM327, mémorisation et reconnexion automatique du dernier adaptateur, lecture des codes défaut avec descriptions françaises et effacement des défauts."
+          fi
