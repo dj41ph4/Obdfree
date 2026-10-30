@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 class ObdViewModel(
     application: Application,
@@ -82,7 +83,7 @@ class ObdViewModel(
                     connect()
                 }
             }
-            .onFailure(::setError)
+            .onFailure { setError(it, "Bluetooth") }
     }
 
     fun selectAdapter(adapter: BluetoothAdapterItem) {
@@ -99,7 +100,7 @@ class ObdViewModel(
 
     fun connect() {
         val adapter = _state.value.selectedAdapter
-            ?: return setError(IllegalStateException("Choisis un adaptateur Bluetooth"))
+            ?: return setError(IllegalStateException("Choisis un adaptateur Bluetooth"), "Connexion")
 
         if (_state.value.connectionState == ConnectionState.CONNECTING ||
             _state.value.connectionState == ConnectionState.INITIALIZING
@@ -147,7 +148,7 @@ class ObdViewModel(
                         connectionState = ConnectionState.ERROR,
                         isBusy = false,
                         statusMessage = "Connexion impossible",
-                        errorMessage = error.message ?: "Erreur Bluetooth/OBD",
+                        errorMessage = friendlyError(error, adapter.name),
                     )
                 }
             }
@@ -182,7 +183,7 @@ class ObdViewModel(
                     )
                 }
             } catch (error: Throwable) {
-                setError(error)
+                setError(error, "Lecture impossible")
             }
         }
     }
@@ -212,19 +213,30 @@ class ObdViewModel(
                     )
                 }
             } catch (error: Throwable) {
-                setError(error)
+                setError(error, "Effacement impossible")
             }
         }
     }
 
-    private fun setError(error: Throwable) {
+    private fun setError(error: Throwable, fallback: String) {
         _state.update {
             it.copy(
                 isBusy = false,
-                errorMessage = error.message ?: "Erreur inconnue",
+                errorMessage = friendlyError(error, fallback),
                 statusMessage = "Une erreur est survenue",
             )
         }
+    }
+
+    private fun friendlyError(error: Throwable, context: String): String = when (error) {
+        is SecurityException -> "Autorisation Bluetooth manquante. Vérifie l’accès aux appareils à proximité."
+        is IOException -> "Impossible de communiquer avec $context. Vérifie que le dongle OBD est alimenté et à portée."
+        else -> error.message
+            ?.lineSequence()
+            ?.firstOrNull()
+            ?.take(180)
+            ?.takeIf { it.isNotBlank() }
+            ?: context
     }
 
     private fun hasBluetoothPermission(): Boolean =
