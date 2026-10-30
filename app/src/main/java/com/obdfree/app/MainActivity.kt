@@ -35,12 +35,10 @@ class MainActivity : ComponentActivity() {
                 ObdFreeApp(
                     state = state,
                     onRequestBluetoothPermission = ::requestBluetoothPermission,
-                    onRefreshAdapters = viewModel::refreshPairedAdapters,
+                    onRefreshAdapters = { viewModel.refreshPairedAdapters() },
                     onSelectAdapter = viewModel::selectAdapter,
                     onConnect = viewModel::connect,
-                    onDisconnect = viewModel::disconnect,
                     onScan = viewModel::scan,
-                    onRefreshLive = viewModel::refreshLiveData,
                     onClearCodes = viewModel::clearCodes,
                 )
             }
