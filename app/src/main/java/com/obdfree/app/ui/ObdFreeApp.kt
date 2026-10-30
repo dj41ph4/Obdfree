@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.obdfree.app.BuildConfig
 import com.obdfree.app.model.BluetoothAdapterItem
 import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
@@ -95,9 +96,9 @@ fun ObdFreeApp(
             .background(
                 Brush.verticalGradient(
                     listOf(
-                        Color(0xFF081722),
+                        Color(0xFF071722),
                         DeepInk,
-                        Color(0xFF050C12),
+                        Color(0xFF040A0F),
                     ),
                 ),
             ),
@@ -105,7 +106,7 @@ fun ObdFreeApp(
         AmbientGlow(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 18.dp),
+                .padding(top = 28.dp),
         )
 
         LazyColumn(
@@ -113,7 +114,7 @@ fun ObdFreeApp(
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding(),
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item { Header() }
@@ -137,8 +138,8 @@ fun ObdFreeApp(
                     enabled = state.connectionState == ConnectionState.CONNECTED && !state.isBusy,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp),
-                    shape = RoundedCornerShape(20.dp),
+                        .height(60.dp),
+                    shape = RoundedCornerShape(21.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Electric,
                         contentColor = DeepInk,
@@ -153,11 +154,11 @@ fun ObdFreeApp(
                             color = DeepInk,
                         )
                     } else {
-                        Icon(Icons.Rounded.Refresh, null)
+                        Icon(Icons.Rounded.Refresh, contentDescription = null)
                     }
                     Spacer(Modifier.width(9.dp))
                     Text(
-                        if (state.isBusy) state.statusMessage else "Lire les codes défaut",
+                        text = if (state.isBusy) state.statusMessage else "Lire les codes défaut",
                         fontWeight = FontWeight.Black,
                     )
                 }
@@ -179,7 +180,9 @@ fun ObdFreeApp(
                     )
                 }
             } else {
-                items(state.troubleCodes, key = { it.code }) { DtcCard(it) }
+                items(state.troubleCodes, key = { it.code }) { code ->
+                    DtcCard(code)
+                }
             }
 
             if (state.connectionState == ConnectionState.CONNECTED) {
@@ -189,12 +192,12 @@ fun ObdFreeApp(
                         enabled = !state.isBusy,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp),
+                            .height(58.dp),
                         shape = RoundedCornerShape(20.dp),
                         border = BorderStroke(1.dp, Danger.copy(alpha = 0.42f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
                     ) {
-                        Icon(Icons.Rounded.DeleteSweep, null)
+                        Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("Effacer les défauts", fontWeight = FontWeight.Bold)
                     }
@@ -203,8 +206,8 @@ fun ObdFreeApp(
 
             item {
                 Text(
-                    "OBDfree 0.0.2  •  descriptions FR avec base OBDex en cache",
-                    color = TextSecondary.copy(alpha = 0.62f),
+                    text = "OBDfree ${BuildConfig.VERSION_NAME}  •  descriptions françaises",
+                    color = TextSecondary.copy(alpha = 0.58f),
                     fontSize = 10.sp,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -232,11 +235,15 @@ fun ObdFreeApp(
             onDismissRequest = { showClearDialog = false },
             containerColor = Color(0xFF0E1A23),
             title = {
-                Text("Effacer les défauts ?", color = TextPrimary, fontWeight = FontWeight.Black)
+                Text(
+                    text = "Effacer les défauts ?",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Black,
+                )
             },
             text = {
                 Text(
-                    "À faire après avoir noté les codes. L’effacement remet aussi certains moniteurs OBD à zéro et ne répare pas la panne.",
+                    text = "À faire après avoir noté les codes. L’effacement remet aussi certains moniteurs OBD à zéro et ne répare pas la panne.",
                     color = TextSecondary,
                 )
             },
@@ -268,39 +275,44 @@ private fun Header() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 6.dp),
+            .padding(top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(17.dp))
+                .size(50.dp)
+                .clip(RoundedCornerShape(18.dp))
                 .background(
                     Brush.linearGradient(
                         listOf(
-                            Electric.copy(alpha = 0.25f),
+                            Electric.copy(alpha = 0.26f),
                             Mint.copy(alpha = 0.08f),
                         ),
                     ),
                 )
-                .border(1.dp, Electric.copy(alpha = 0.30f), RoundedCornerShape(17.dp)),
+                .border(1.dp, Electric.copy(alpha = 0.32f), RoundedCornerShape(18.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Rounded.DirectionsCar, null, tint = Electric, modifier = Modifier.size(27.dp))
+            Icon(
+                imageVector = Icons.Rounded.DirectionsCar,
+                contentDescription = null,
+                tint = Electric,
+                modifier = Modifier.size(28.dp),
+            )
         }
 
-        Spacer(Modifier.width(13.dp))
+        Spacer(Modifier.width(14.dp))
 
         Column(Modifier.weight(1f)) {
             Text(
-                "OBDfree",
+                text = "OBDfree",
                 color = TextPrimary,
                 fontWeight = FontWeight.Black,
-                fontSize = 25.sp,
+                fontSize = 26.sp,
                 letterSpacing = (-0.8).sp,
             )
             Text(
-                "Le diagnostic utile. Rien de plus.",
+                text = "Le diagnostic utile. Rien de plus.",
                 color = TextSecondary,
                 fontSize = 12.sp,
             )
@@ -311,9 +323,14 @@ private fun Header() {
                 .clip(CircleShape)
                 .background(Color.White.copy(alpha = 0.055f))
                 .border(1.dp, Color.White.copy(alpha = 0.09f), CircleShape)
-                .padding(horizontal = 9.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 7.dp),
         ) {
-            Text("0.0.2", color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text(
+                text = BuildConfig.VERSION_NAME,
+                color = TextSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
@@ -326,14 +343,14 @@ private fun ConnectionCard(
     onConnect: () -> Unit,
 ) {
     GlassPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(15.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StatusOrb(state.connectionState)
                 Spacer(Modifier.width(14.dp))
 
                 Column(Modifier.weight(1f)) {
                     Text(
-                        when (state.connectionState) {
+                        text = when (state.connectionState) {
                             ConnectionState.CONNECTED -> "Connecté"
                             ConnectionState.CONNECTING -> "Connexion…"
                             ConnectionState.INITIALIZING -> "Initialisation OBD-II…"
@@ -342,10 +359,10 @@ private fun ConnectionCard(
                         },
                         color = TextPrimary,
                         fontWeight = FontWeight.Black,
-                        fontSize = 18.sp,
+                        fontSize = 19.sp,
                     )
                     Text(
-                        state.selectedAdapter?.name
+                        text = state.selectedAdapter?.name
                             ?: if (state.permissionGranted) "Choisis ton adaptateur" else "Autorisation Bluetooth requise",
                         color = TextSecondary,
                         fontSize = 12.sp,
@@ -370,11 +387,19 @@ private fun ConnectionCard(
 
             when {
                 !state.permissionGranted -> {
-                    PremiumButton("Autoriser le Bluetooth", Icons.Rounded.Bluetooth, onPermission)
+                    PremiumButton(
+                        text = "Autoriser le Bluetooth",
+                        iconConnected = false,
+                        onClick = onPermission,
+                    )
                 }
 
                 state.selectedAdapter == null -> {
-                    PremiumButton("Choisir un adaptateur", Icons.Rounded.Bluetooth, onChooseAdapter)
+                    PremiumButton(
+                        text = "Choisir un adaptateur",
+                        iconConnected = false,
+                        onClick = onChooseAdapter,
+                    )
                 }
 
                 state.connectionState == ConnectionState.CONNECTED -> {
@@ -383,28 +408,43 @@ private fun ConnectionCard(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .clickable(onClick = onChooseAdapter)
-                            .padding(vertical = 3.dp),
+                            .padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Rounded.Memory, null, tint = Mint, modifier = Modifier.size(20.dp))
+                        Icon(
+                            imageVector = Icons.Rounded.Memory,
+                            contentDescription = null,
+                            tint = Mint,
+                            modifier = Modifier.size(20.dp),
+                        )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Adaptateur mémorisé", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                             Text(
-                                "Reconnexion automatique au prochain démarrage",
+                                text = "Adaptateur mémorisé",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                            )
+                            Text(
+                                text = "Reconnexion automatique au prochain démarrage",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                             )
                         }
-                        Text("Changer", color = Electric, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "Changer",
+                            color = Electric,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
 
                 else -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         PremiumButton(
                             text = if (state.isBusy) "Connexion…" else "Connecter ${state.selectedAdapter.name}",
-                            icon = Icons.Rounded.BluetoothConnected,
+                            iconConnected = true,
                             onClick = onConnect,
                             enabled = !state.isBusy,
                         )
@@ -422,17 +462,52 @@ private fun ConnectionCard(
 }
 
 @Composable
+private fun PremiumButton(
+    text: String,
+    iconConnected: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Electric,
+            contentColor = DeepInk,
+            disabledContainerColor = Electric.copy(alpha = 0.14f),
+            disabledContentColor = TextSecondary,
+        ),
+    ) {
+        Icon(
+            imageVector = if (iconConnected) Icons.Rounded.BluetoothConnected else Icons.Rounded.Bluetooth,
+            contentDescription = null,
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(text, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
 private fun SectionHeader(count: Int, connected: Boolean, status: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 3.dp, top = 4.dp),
+            .padding(start = 3.dp, top = 5.dp, end = 3.dp, bottom = 0.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Défauts", color = TextPrimary, fontWeight = FontWeight.Black, fontSize = 18.sp)
             Text(
-                when {
+                text = "Défauts",
+                color = TextPrimary,
+                fontWeight = FontWeight.Black,
+                fontSize = 19.sp,
+            )
+            Text(
+                text = when {
                     count > 0 -> "$count code(s) lu(s) sur le véhicule"
                     connected -> status
                     else -> "Connecte le véhicule pour lancer une lecture"
@@ -443,10 +518,10 @@ private fun SectionHeader(count: Int, connected: Boolean, status: String) {
         }
         if (count > 0) {
             Text(
-                count.toString(),
+                text = count.toString(),
                 color = Danger,
                 fontWeight = FontWeight.Black,
-                fontSize = 19.sp,
+                fontSize = 20.sp,
             )
         }
     }
@@ -455,7 +530,7 @@ private fun SectionHeader(count: Int, connected: Boolean, status: String) {
 @Composable
 private fun DtcCard(code: TroubleCode) {
     GlassPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -464,11 +539,16 @@ private fun DtcCard(code: TroubleCode) {
                         .border(1.dp, Danger.copy(alpha = 0.23f), RoundedCornerShape(12.dp))
                         .padding(horizontal = 11.dp, vertical = 7.dp),
                 ) {
-                    Text(code.code, color = Danger, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                    Text(
+                        text = code.code,
+                        color = Danger,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 15.sp,
+                    )
                 }
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    code.category,
+                    text = code.category,
                     color = TextSecondary,
                     fontSize = 11.sp,
                     modifier = Modifier.weight(1f),
@@ -476,7 +556,7 @@ private fun DtcCard(code: TroubleCode) {
             }
 
             Text(
-                code.description ?: "Défaut OBD-II détecté.",
+                text = code.description ?: "Défaut OBD-II détecté.",
                 color = TextPrimary,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 14.sp,
@@ -488,29 +568,58 @@ private fun DtcCard(code: TroubleCode) {
 
 @Composable
 private fun EmptyState(connected: Boolean, status: String) {
+    val clean = connected && status.startsWith("Aucun défaut")
+
     GlassPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                if (connected && status.startsWith("Aucun défaut")) Icons.Rounded.CheckCircle
-                else Icons.Rounded.ErrorOutline,
-                null,
-                tint = if (connected && status.startsWith("Aucun défaut")) Mint else TextSecondary,
+                imageVector = if (clean) Icons.Rounded.CheckCircle else Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = if (clean) Mint else TextSecondary,
                 modifier = Modifier.size(28.dp),
             )
             Spacer(Modifier.width(13.dp))
             Column {
                 Text(
-                    if (connected && status.startsWith("Aucun défaut")) "Aucun défaut détecté" else "Aucune lecture pour le moment",
+                    text = if (clean) "Aucun défaut détecté" else "Aucune lecture pour le moment",
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    if (connected) "Appuie sur “Lire les codes défaut”." else "La reconnexion au dernier dongle se fait automatiquement.",
+                    text = if (connected) "Appuie sur Lire les codes défaut." else "Connecte ton adaptateur OBD-II.",
                     color = TextSecondary,
                     fontSize = 11.sp,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ErrorBanner(message: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Danger.copy(alpha = 0.08f))
+            .border(1.dp, Danger.copy(alpha = 0.25f), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.ErrorOutline,
+            contentDescription = null,
+            tint = Danger,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(11.dp))
+        Text(
+            text = message,
+            color = Color(0xFFFFB8C1),
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -526,13 +635,13 @@ private fun AdapterDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF0E1A23),
         title = {
-            Text("Adaptateur Bluetooth", color = TextPrimary, fontWeight = FontWeight.Black)
+            Text("Choisir l’adaptateur", color = TextPrimary, fontWeight = FontWeight.Black)
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (adapters.isEmpty()) {
                     Text(
-                        "Aucun appareil appairé. Appaire d’abord ton dongle OBD dans Android, puis actualise.",
+                        text = "Aucun appareil appairé. Appaire d’abord ton dongle OBD dans les réglages Bluetooth Android.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                     )
@@ -543,20 +652,40 @@ private fun AdapterDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(15.dp))
-                                .background(if (active) Electric.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.025f))
+                                .background(
+                                    if (active) Electric.copy(alpha = 0.10f)
+                                    else Color.White.copy(alpha = 0.025f),
+                                )
                                 .clickable { onSelect(adapter) }
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
-                                if (active) Icons.Rounded.BluetoothConnected else Icons.Rounded.Bluetooth,
-                                null,
+                                imageVector = Icons.Rounded.Bluetooth,
+                                contentDescription = null,
                                 tint = if (active) Electric else TextSecondary,
                             )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(adapter.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text(adapter.address, color = TextSecondary, fontSize = 10.sp)
+                                Text(
+                                    text = adapter.name,
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                )
+                                Text(
+                                    text = adapter.address,
+                                    color = TextSecondary,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                            if (active) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Mint,
+                                    modifier = Modifier.size(18.dp),
+                                )
                             }
                         }
                     }
@@ -564,70 +693,57 @@ private fun AdapterDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onRefresh) { Text("Actualiser", color = Electric) }
+            TextButton(onClick = onRefresh) {
+                Text("Actualiser", color = Electric)
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Fermer", color = TextSecondary) }
+            TextButton(onClick = onDismiss) {
+                Text("Fermer", color = TextSecondary)
+            }
         },
     )
 }
 
 @Composable
-private fun PremiumButton(
-    text: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
+private fun GlassPanel(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(54.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Electric,
-            contentColor = DeepInk,
-            disabledContainerColor = Electric.copy(alpha = 0.15f),
-            disabledContentColor = TextSecondary,
-        ),
-    ) {
-        Icon(icon, null)
-        Spacer(Modifier.width(9.dp))
-        Text(text, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun GlassPanel(content: @Composable () -> Unit) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .shadow(18.dp, RoundedCornerShape(24.dp))
-            .clip(RoundedCornerShape(24.dp))
+            .shadow(
+                elevation = 22.dp,
+                shape = RoundedCornerShape(26.dp),
+                ambientColor = Color.Black.copy(alpha = 0.28f),
+                spotColor = Color.Black.copy(alpha = 0.28f),
+            )
+            .clip(RoundedCornerShape(26.dp))
             .background(
                 Brush.linearGradient(
                     listOf(
                         GlassStrong,
                         Glass,
-                        Color.White.copy(alpha = 0.028f),
+                        Color.White.copy(alpha = 0.03f),
                     ),
                 ),
             )
             .border(
-                1.dp,
-                Brush.linearGradient(
+                width = 1.dp,
+                brush = Brush.linearGradient(
                     listOf(
-                        Color.White.copy(alpha = 0.20f),
-                        GlassBorder.copy(alpha = 0.52f),
-                        Electric.copy(alpha = 0.08f),
+                        Color.White.copy(alpha = 0.24f),
+                        GlassBorder.copy(alpha = 0.55f),
+                        Electric.copy(alpha = 0.09f),
                     ),
                 ),
-                RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(26.dp),
             )
             .padding(18.dp),
-    ) { content() }
+    ) {
+        content()
+    }
 }
 
 @Composable
@@ -636,74 +752,74 @@ private fun StatusOrb(state: ConnectionState) {
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900), repeatMode = RepeatMode.Reverse),
-        label = "obd-status-pulse",
+        animationSpec = infiniteRepeatable(
+            animation = tween(950),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "obd-pulse",
     )
 
     val color = when (state) {
         ConnectionState.CONNECTED -> Mint
+        ConnectionState.CONNECTING,
+        ConnectionState.INITIALIZING -> Electric
         ConnectionState.ERROR -> Danger
-        else -> Electric
+        ConnectionState.DISCONNECTED -> Electric
     }
-    val animated = state == ConnectionState.CONNECTING || state == ConnectionState.INITIALIZING
+
+    val alpha = when (state) {
+        ConnectionState.CONNECTING,
+        ConnectionState.INITIALIZING -> 0.10f + (0.08f * pulse)
+        else -> 0.12f
+    }
 
     Box(
         modifier = Modifier
             .size(54.dp)
             .clip(CircleShape)
-            .background(color.copy(alpha = if (animated) 0.12f * pulse else 0.11f))
-            .border(1.dp, color.copy(alpha = if (animated) 0.40f * pulse else 0.30f), CircleShape),
+            .background(color.copy(alpha = alpha))
+            .border(1.dp, color.copy(alpha = 0.32f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            if (state == ConnectionState.CONNECTED) Icons.Rounded.BluetoothConnected else Icons.Rounded.Bluetooth,
-            null,
+            imageVector = if (state == ConnectionState.CONNECTED) {
+                Icons.Rounded.BluetoothConnected
+            } else {
+                Icons.Rounded.Bluetooth
+            },
+            contentDescription = null,
             tint = color,
-            modifier = Modifier.size(25.dp),
+            modifier = Modifier.size(27.dp),
         )
-    }
-}
-
-@Composable
-private fun ErrorBanner(message: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(17.dp))
-            .background(Danger.copy(alpha = 0.08f))
-            .border(1.dp, Danger.copy(alpha = 0.22f), RoundedCornerShape(17.dp))
-            .padding(13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.ErrorOutline, null, tint = Danger, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(10.dp))
-        Text(message, color = Color(0xFFFFBBC4), fontSize = 12.sp, modifier = Modifier.weight(1f))
     }
 }
 
 @Composable
 private fun AmbientGlow(modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "ambient")
-    val glowAlpha by transition.animateFloat(
-        initialValue = 0.36f,
-        targetValue = 0.62f,
-        animationSpec = infiniteRepeatable(tween(3_800), repeatMode = RepeatMode.Reverse),
+    val alpha by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4200),
+            repeatMode = RepeatMode.Reverse,
+        ),
         label = "ambient-alpha",
     )
 
     Box(
         modifier = modifier
             .size(270.dp)
-            .alpha(glowAlpha)
+            .alpha(alpha)
             .background(
-                Brush.radialGradient(
+                brush = Brush.radialGradient(
                     listOf(
-                        Electric.copy(alpha = 0.10f),
-                        Electric.copy(alpha = 0.018f),
+                        Electric.copy(alpha = 0.11f),
+                        Electric.copy(alpha = 0.02f),
                         Color.Transparent,
                     ),
                 ),
-                CircleShape,
+                shape = CircleShape,
             ),
     )
 }
