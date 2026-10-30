@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.obdfree.app"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.obdfree.app"
@@ -31,7 +31,8 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    // Compose 1.11.x: latest production line before Compose 1.12 began requiring compileSdk 37.
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     implementation(composeBom)
     androidTestImplementation(composeBom)
