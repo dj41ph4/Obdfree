@@ -2,18 +2,19 @@ package com.obdfree.app
 
 import android.Manifest
 import android.app.Application
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.obdfree.app.core.obd.DtcKnowledgeService
 import com.obdfree.app.core.obd.Elm327Client
 import com.obdfree.app.core.transport.BluetoothClassicTransport
 import com.obdfree.app.model.BluetoothAdapterItem
 import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,20 +27,16 @@ class ObdViewModel(
 
     private val transport = BluetoothClassicTransport(application)
     private val client = Elm327Client(transport)
+    private val knowledge = DtcKnowledgeService(application)
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow(
-        DiagnosticUiState(
-            permissionGranted = hasBluetoothPermission(),
-        ),
+        DiagnosticUiState(permissionGranted = hasBluetoothPermission()),
     )
     val state: StateFlow<DiagnosticUiState> = _state.asStateFlow()
 
-    private var liveJob: Job? = null
-
     init {
-        if (_state.value.permissionGranted) {
-            refreshPairedAdapters()
-        }
+        if (_state.value.permissionGranted) refreshPairedAdapters(autoReconnect = true)
     }
 
     fun onPermissionResult(granted: Boolean) {
@@ -49,50 +46,66 @@ class ObdViewModel(
                 errorMessage = if (granted) null else "Autorisation Bluetooth requise",
             )
         }
-        if (granted) refreshPairedAdapters()
+        if (granted) refreshPairedAdapters(autoReconnect = true)
     }
 
-    fun refreshPairedAdapters() {
+    fun refreshPairedAdapters(autoReconnect: Boolean = false) {
         if (!hasBluetoothPermission()) return
 
         runCatching { transport.pairedDevices() }
             .onSuccess { devices ->
-                _state.update { current ->
-                    val selected = current.selectedAdapter
-                        ?.takeIf { old -> devices.any { it.address == old.address } }
-                        ?: devices.firstOrNull { looksLikeObd(it) }
-                        ?: devices.firstOrNull()
+                val savedAddress = prefs.getString(KEY_LAST_DEVICE, null)
+                val selected = devices.firstOrNull { it.address == savedAddress }
+                    ?: _state.value.selectedAdapter?.takeIf { old -> devices.any { it.address == old.address } }
+                    ?: devices.firstOrNull { looksLikeObd(it) }
+                    ?: devices.firstOrNull()
 
-                    current.copy(
+                _state.update {
+                    it.copy(
                         pairedAdapters = devices,
                         selectedAdapter = selected,
-                        statusMessage = if (devices.isEmpty()) {
-                            "Aucun appareil Bluetooth appairé"
-                        } else {
-                            "${devices.size} appareil(s) appairé(s)"
+                        statusMessage = when {
+                            devices.isEmpty() -> "Aucun appareil Bluetooth appairé"
+                            selected?.address == savedAddress -> "Adaptateur mémorisé"
+                            else -> "Prêt à se connecter"
                         },
                         errorMessage = null,
                     )
+                }
+
+                if (
+                    autoReconnect &&
+                    savedAddress != null &&
+                    selected?.address == savedAddress &&
+                    _state.value.connectionState == ConnectionState.DISCONNECTED
+                ) {
+                    connect()
                 }
             }
             .onFailure(::setError)
     }
 
     fun selectAdapter(adapter: BluetoothAdapterItem) {
+        prefs.edit().putString(KEY_LAST_DEVICE, adapter.address).apply()
         _state.update {
             it.copy(
                 selectedAdapter = adapter,
                 errorMessage = null,
+                statusMessage = "${adapter.name} mémorisé",
             )
         }
+        connect()
     }
 
     fun connect() {
         val adapter = _state.value.selectedAdapter
             ?: return setError(IllegalStateException("Choisis un adaptateur Bluetooth"))
 
+        if (_state.value.connectionState == ConnectionState.CONNECTING ||
+            _state.value.connectionState == ConnectionState.INITIALIZING
+        ) return
+
         viewModelScope.launch {
-            liveJob?.cancel()
             _state.update {
                 it.copy(
                     connectionState = ConnectionState.CONNECTING,
@@ -108,11 +121,12 @@ class ObdViewModel(
                 _state.update {
                     it.copy(
                         connectionState = ConnectionState.INITIALIZING,
-                        statusMessage = "Initialisation ELM327…",
+                        statusMessage = "Initialisation OBD-II…",
                     )
                 }
 
                 val info = client.initialize()
+                prefs.edit().putString(KEY_LAST_DEVICE, adapter.address).apply()
 
                 _state.update {
                     it.copy(
@@ -120,11 +134,10 @@ class ObdViewModel(
                         adapterIdentity = info.identity,
                         protocol = info.protocol,
                         isBusy = false,
-                        statusMessage = "Connecté",
+                        statusMessage = "Connecté à ${adapter.name}",
+                        errorMessage = null,
                     )
                 }
-
-                scan()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -141,23 +154,6 @@ class ObdViewModel(
         }
     }
 
-    fun disconnect() {
-        viewModelScope.launch {
-            liveJob?.cancel()
-            transport.disconnect()
-            _state.update {
-                it.copy(
-                    connectionState = ConnectionState.DISCONNECTED,
-                    adapterIdentity = null,
-                    protocol = null,
-                    liveData = com.obdfree.app.model.LiveDataSnapshot(),
-                    isBusy = false,
-                    statusMessage = "Déconnecté",
-                )
-            }
-        }
-    }
-
     fun scan() {
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
@@ -165,45 +161,24 @@ class ObdViewModel(
             _state.update {
                 it.copy(
                     isBusy = true,
-                    statusMessage = "Lecture des défauts…",
+                    statusMessage = "Lecture des codes défaut…",
                     errorMessage = null,
                 )
             }
 
             try {
-                val codes = client.readTroubleCodes()
-                val live = runCatching { client.readLiveData() }
-                    .getOrDefault(_state.value.liveData)
+                val rawCodes = client.readTroubleCodes()
+                val codes = knowledge.enrich(rawCodes)
 
                 _state.update {
                     it.copy(
                         troubleCodes = codes,
-                        liveData = live,
                         isBusy = false,
                         statusMessage = if (codes.isEmpty()) {
                             "Aucun défaut OBD-II détecté"
                         } else {
                             "${codes.size} défaut(s) détecté(s)"
                         },
-                    )
-                }
-            } catch (error: Throwable) {
-                setError(error)
-            }
-        }
-    }
-
-    fun refreshLiveData() {
-        if (_state.value.connectionState != ConnectionState.CONNECTED) return
-
-        liveJob?.cancel()
-        liveJob = viewModelScope.launch {
-            try {
-                val live = client.readLiveData()
-                _state.update {
-                    it.copy(
-                        liveData = live,
-                        errorMessage = null,
                     )
                 }
             } catch (error: Throwable) {
@@ -219,7 +194,7 @@ class ObdViewModel(
             _state.update {
                 it.copy(
                     isBusy = true,
-                    statusMessage = "Effacement des informations diagnostic…",
+                    statusMessage = "Effacement des défauts…",
                     errorMessage = null,
                 )
             }
@@ -232,7 +207,8 @@ class ObdViewModel(
                     it.copy(
                         troubleCodes = emptyList(),
                         isBusy = false,
-                        statusMessage = "Commande d'effacement confirmée",
+                        statusMessage = "Défauts effacés",
+                        errorMessage = null,
                     )
                 }
             } catch (error: Throwable) {
@@ -260,7 +236,11 @@ class ObdViewModel(
 
     private fun looksLikeObd(item: BluetoothAdapterItem): Boolean {
         val text = item.name.lowercase()
-        return listOf("obd", "elm", "vgate", "vlink", "obdlink")
-            .any(text::contains)
+        return listOf("obd", "elm", "vgate", "vlink", "obdlink").any(text::contains)
+    }
+
+    private companion object {
+        const val PREFS_NAME = "obdfree"
+        const val KEY_LAST_DEVICE = "last_device_address"
     }
 }
