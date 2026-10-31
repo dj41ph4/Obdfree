@@ -7,6 +7,7 @@ import android.content.Context
 import com.obdfree.app.model.BluetoothAdapterItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.util.UUID
 
 class BluetoothClassicTransport(
@@ -47,14 +48,27 @@ class BluetoothClassicTransport(
         check(adapter.isEnabled) { "Le Bluetooth est désactivé" }
 
         val device = adapter.getRemoteDevice(address)
-        val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
 
-        // OBDfree only connects to an already-paired adapter. Do not call
-        // BluetoothAdapter.cancelDiscovery() here: on Android 12+ that API
-        // requires BLUETOOTH_SCAN, which this minimal paired-device flow does
-        // not need and intentionally does not request.
-        newSocket.connect()
-        socket = newSocket
+        // Prefer the authenticated RFCOMM link. Some legacy serial boards and cheap
+        // ELM327 clones cannot complete an authenticated SPP connection correctly;
+        // Android explicitly provides the insecure RFCOMM variant for that case.
+        val secureSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        try {
+            secureSocket.connect()
+            socket = secureSocket
+        } catch (secureError: IOException) {
+            runCatching { secureSocket.close() }
+
+            val insecureSocket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+            try {
+                insecureSocket.connect()
+                socket = insecureSocket
+            } catch (insecureError: IOException) {
+                runCatching { insecureSocket.close() }
+                insecureError.addSuppressed(secureError)
+                throw insecureError
+            }
+        }
     }
 
     override suspend fun disconnect() = withContext(Dispatchers.IO) {
