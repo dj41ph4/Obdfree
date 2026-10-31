@@ -5,28 +5,73 @@ import com.obdfree.app.model.TroubleCode
 
 object ObdDecoder {
 
-    fun decodeTroubleCodes(response: String): List<TroubleCode> {
-        val frames = response
-            .lineSequence()
-            .map(::hexOnly)
-            .filter { it.length >= 2 }
-            .toList()
+    data class MonitorStatus(
+        val milOn: Boolean,
+        val storedDtcCount: Int,
+    )
 
-        val pairs = buildList {
-            frames.forEach { frame ->
-                val start = frame.indexOf("43")
-                if (start < 0) return@forEach
+    fun decodeMonitorStatus(response: String): MonitorStatus? {
+        response.lineSequence().forEach { rawLine ->
+            val compact = hexOnly(rawLine)
+            val marker = compact.indexOf("4101")
+            if (marker < 0) return@forEach
 
-                val payload = frame.substring(start + 2)
-                payload.chunked(4)
-                    .filter { it.length == 4 && it != "0000" }
-                    .forEach(::add)
-            }
+            val data = compact.drop(marker + 4)
+            if (data.length < 2) return@forEach
+
+            val statusByte = data.substring(0, 2).toIntOrNull(16) ?: return@forEach
+            return MonitorStatus(
+                milOn = statusByte and 0x80 != 0,
+                storedDtcCount = statusByte and 0x7F,
+            )
+        }
+        return null
+    }
+
+    fun decodeTroubleCodes(
+        response: String,
+        positiveResponse: Int = 0x43,
+        expectedCount: Int? = null,
+        hasCanCountByte: Boolean? = null,
+    ): List<TroubleCode> {
+        val payloads = buildList {
+            addAll(extractIsoTpPayloads(response, positiveResponse))
+            addAll(extractSimplePayloads(response, positiveResponse))
         }
 
-        return pairs
-            .mapNotNull(::decodeDtcPair)
-            .distinctBy { it.code }
+        val codes = LinkedHashMap<String, TroubleCode>()
+
+        payloads.forEach { fullPayload ->
+            val modeIndex = fullPayload.indexOf(positiveResponse)
+            if (modeIndex < 0 || modeIndex >= fullPayload.lastIndex) return@forEach
+
+            var payload = fullPayload.drop(modeIndex + 1)
+            if (payload.isEmpty()) return@forEach
+
+            val shouldStripCount = when (hasCanCountByte) {
+                true -> true
+                false -> false
+                null -> looksLikeCountPrefixedPayload(payload, expectedCount)
+            }
+
+            if (shouldStripCount) {
+                val advertised = payload.firstOrNull() ?: 0
+                payload = payload.drop(1)
+                if (advertised == 0) return@forEach
+                if (payload.size >= advertised * 2) {
+                    payload = payload.take(advertised * 2)
+                }
+            } else if (expectedCount != null && expectedCount > 0 && payload.size >= expectedCount * 2) {
+                payload = payload.take(expectedCount * 2)
+            }
+
+            payload.chunked(2)
+                .filter { it.size == 2 }
+                .mapNotNull { decodeDtcBytes(it[0], it[1]) }
+                .forEach { codes.putIfAbsent(it.code, it) }
+        }
+
+        return codes.values.toList()
     }
 
     fun decodeLiveData(
@@ -35,24 +80,102 @@ object ObdDecoder {
         coolantResponse: String,
         throttleResponse: String,
     ): LiveDataSnapshot = LiveDataSnapshot(
-        rpm = pidBytes(rpmResponse, 0x0C, 2)?.let { (a, b) ->
-            ((a * 256) + b) / 4
-        },
+        rpm = pidBytes(rpmResponse, 0x0C, 2)?.let { (a, b) -> ((a * 256) + b) / 4 },
         speedKph = pidBytes(speedResponse, 0x0D, 1)?.firstOrNull(),
-        coolantCelsius = pidBytes(coolantResponse, 0x05, 1)
-            ?.firstOrNull()
-            ?.minus(40),
-        throttlePercent = pidBytes(throttleResponse, 0x11, 1)
-            ?.firstOrNull()
-            ?.let { it * 100f / 255f },
+        coolantCelsius = pidBytes(coolantResponse, 0x05, 1)?.firstOrNull()?.minus(40),
+        throttlePercent = pidBytes(throttleResponse, 0x11, 1)?.firstOrNull()?.let { it * 100f / 255f },
     )
 
-    private fun decodeDtcPair(pair: String): TroubleCode? {
-        val raw = pair.toIntOrNull(16) ?: return null
-        if (raw == 0) return null
+    private fun extractSimplePayloads(response: String, positiveResponse: Int): List<List<Int>> {
+        val marker = positiveResponse.toString(16).padStart(2, '0').uppercase()
+        val result = mutableListOf<List<Int>>()
 
-        val first = (raw shr 8) and 0xFF
-        val second = raw and 0xFF
+        response.lineSequence().forEach { rawLine ->
+            val compact = hexOnly(rawLine)
+            var index = compact.indexOf(marker)
+            while (index >= 0) {
+                val tail = compact.drop(index)
+                val bytes = tail.chunked(2)
+                    .filter { it.length == 2 }
+                    .mapNotNull { it.toIntOrNull(16) }
+                if (bytes.isNotEmpty()) result += bytes
+                index = compact.indexOf(marker, startIndex = index + marker.length)
+            }
+        }
+
+        return result
+    }
+
+    private fun extractIsoTpPayloads(response: String, positiveResponse: Int): List<List<Int>> {
+        data class Buffer(val expectedLength: Int, val bytes: MutableList<Int>)
+
+        val buffers = LinkedHashMap<String, Buffer>()
+        val completed = mutableListOf<List<Int>>()
+
+        response.lineSequence().forEach { rawLine ->
+            val tokens = rawLine.trim().split(Regex("\\s+"))
+            if (tokens.size < 2) return@forEach
+
+            val canId = tokens.first().uppercase()
+            if ((canId.length != 3 && canId.length != 8) || canId.any { it !in HEX_CHARS }) {
+                return@forEach
+            }
+
+            val bytes = tokens.drop(1).mapNotNull { token ->
+                val clean = token.trim().trim(':').uppercase()
+                clean.takeIf { it.length == 2 && it.all { c -> c in HEX_CHARS } }?.toIntOrNull(16)
+            }
+            if (bytes.isEmpty()) return@forEach
+
+            val pci = bytes.first()
+            when (pci ushr 4) {
+                0 -> {
+                    val length = pci and 0x0F
+                    if (length > 0 && bytes.size >= length + 1) {
+                        completed += bytes.drop(1).take(length)
+                    }
+                }
+
+                1 -> {
+                    if (bytes.size < 3) return@forEach
+                    val length = ((pci and 0x0F) shl 8) or bytes[1]
+                    val buffer = Buffer(length, bytes.drop(2).toMutableList())
+                    buffers[canId] = buffer
+                    if (buffer.bytes.size >= length) {
+                        completed += buffer.bytes.take(length)
+                        buffers.remove(canId)
+                    }
+                }
+
+                2 -> {
+                    val buffer = buffers[canId] ?: return@forEach
+                    buffer.bytes += bytes.drop(1)
+                    if (buffer.bytes.size >= buffer.expectedLength) {
+                        completed += buffer.bytes.take(buffer.expectedLength)
+                        buffers.remove(canId)
+                    }
+                }
+
+                else -> {
+                    if (bytes.contains(positiveResponse)) completed += bytes
+                }
+            }
+        }
+
+        return completed
+    }
+
+    private fun looksLikeCountPrefixedPayload(payload: List<Int>, expectedCount: Int?): Boolean {
+        val first = payload.firstOrNull() ?: return false
+        if (expectedCount != null) return first == expectedCount && payload.size >= 1 + expectedCount * 2
+        if (first == 0) return payload.drop(1).all { it == 0 }
+        val required = first * 2
+        if (required <= 0 || payload.size < required + 1) return false
+        return payload.drop(1 + required).all { it == 0 }
+    }
+
+    private fun decodeDtcBytes(first: Int, second: Int): TroubleCode? {
+        if (first == 0 && second == 0) return null
 
         val family = when ((first shr 6) and 0x03) {
             0 -> 'P'
@@ -61,12 +184,10 @@ object ObdDecoder {
             else -> 'U'
         }
 
-        val digit2 = (first shr 4) and 0x03
-        val digit3 = first and 0x0F
         val code = buildString {
             append(family)
-            append(digit2)
-            append(digit3.toString(16).uppercase())
+            append((first shr 4) and 0x03)
+            append((first and 0x0F).toString(16).uppercase())
             append(second.toString(16).padStart(2, '0').uppercase())
         }
 
@@ -102,7 +223,9 @@ object ObdDecoder {
     }
 
     private fun hexOnly(value: String): String =
-        value.uppercase().filter { it in '0'..'9' || it in 'A'..'F' }
+        value.uppercase().filter { it in HEX_CHARS }
+
+    private val HEX_CHARS = ('0'..'9') + ('A'..'F')
 
     private val COMMON_DTC = mapOf(
         "P0100" to "Circuit du débitmètre d'air",
