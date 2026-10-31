@@ -22,10 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read version
+      - name: Read and validate version
         id: version
         shell: bash
-        run: echo "version=$(tr -d '\r\n' < VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          grep -q "versionName = \"${VERSION}\"" app/build.gradle.kts
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -75,12 +79,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --tags
 
-          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              echo "Refusing to overwrite ${TAG}: it already points to ${TAG_COMMIT}, not ${GITHUB_SHA}."
+              exit 1
+            fi
+          else
             git tag -a "$TAG" -m "OBDfree ${VERSION}"
             git push origin "$TAG"
           fi
 
-          NOTES="OBDfree ${VERSION}: lecture ELM327 renforcée avec validation du nombre de DTC via Mode 01 PID 01, décodage Mode 03 CAN et non-CAN, reconstitution ISO-TP multi-trames, fallback avec headers ELM, lecture des défauts mémorisés/en attente/permanents (03/07/0A), délais et retries adaptés aux clones ELM327."
+          NOTES="OBDfree ${VERSION}: connexion ELM327 renforcée (fallback protocoles et RFCOMM), récupération BUFFER FULL/RX ERROR/DATA ERROR, décodage CAN/ISO-TP/CAF1 multi-trames, états DTC mémorisé/en attente/permanent, contexte depuis le dernier effacement (PID 30/31/4E), descriptions françaises sans inventer les codes constructeur, et mode d'effacement continu toutes les 30 secondes en arrière-plan avec reconnexion automatique."
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
