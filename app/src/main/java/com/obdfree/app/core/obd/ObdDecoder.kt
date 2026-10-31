@@ -91,6 +91,8 @@ object ObdDecoder {
         val result = mutableListOf<List<Int>>()
 
         response.lineSequence().forEach { rawLine ->
+            if (looksLikeSpacedCanHeader(rawLine)) return@forEach
+
             val compact = hexOnly(rawLine)
             var index = compact.indexOf(marker)
             while (index >= 0) {
@@ -163,6 +165,11 @@ object ObdDecoder {
         }
 
         return completed
+    }
+
+    private fun looksLikeSpacedCanHeader(rawLine: String): Boolean {
+        val first = rawLine.trim().substringBefore(' ').uppercase()
+        return (first.length == 3 || first.length == 8) && first.all { it in HEX_CHARS }
     }
 
     private fun looksLikeCountPrefixedPayload(payload: List<Int>, expectedCount: Int?): Boolean {
