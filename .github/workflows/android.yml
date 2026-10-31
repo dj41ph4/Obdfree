@@ -80,7 +80,7 @@ jobs:
             git push origin "$TAG"
           fi
 
-          NOTES="OBDfree ${VERSION}: correctif Bluetooth Android 12+ pour les adaptateurs déjà appairés, reconnexion automatique conservée, erreurs utilisateur simplifiées, lecture/description FR des codes et effacement des défauts."
+          NOTES="OBDfree ${VERSION}: lecture ELM327 renforcée avec validation du nombre de DTC via Mode 01 PID 01, décodage Mode 03 CAN et non-CAN, reconstitution ISO-TP multi-trames, fallback avec headers ELM, lecture des défauts mémorisés/en attente/permanents (03/07/0A), délais et retries adaptés aux clones ELM327."
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
