@@ -13,6 +13,17 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
+      Deliberately no POST_NOTIFICATIONS permission. Android still requires an internal
+      foreground-service notification object, but on Android 13+ it will not be shown
+      in the notification drawer when notification permission is not granted. The OS
+      may still list OBDfree under Active apps, which cannot be hidden legitimately.
+    -->
 
     <application
         android:allowBackup="true"
@@ -30,6 +41,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.ContinuousClearService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice"
+            android:stopWithTask="false" />
 
     </application>
 
