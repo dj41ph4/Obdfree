@@ -2,6 +2,7 @@ package com.obdfree.app.core.obd
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,6 +17,28 @@ class ObdDecoderTest {
             hasCanCountByte = true,
         )
         assertEquals(listOf("P0300", "P0130"), codes.map { it.code })
+    }
+
+    @Test
+    fun `decodes official ELM non CAN mode 03 example`() {
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = "43 01 33 00 00 00 00",
+            positiveResponse = 0x43,
+            expectedCount = 1,
+            hasCanCountByte = false,
+        )
+        assertEquals(listOf("P0133"), codes.map { it.code })
+    }
+
+    @Test
+    fun `decodes raw CAN single frame with headers`() {
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = "7E8 04 43 01 01 33",
+            positiveResponse = 0x43,
+            expectedCount = 1,
+            hasCanCountByte = true,
+        )
+        assertEquals(listOf("P0133"), codes.map { it.code })
     }
 
     @Test
@@ -131,6 +154,22 @@ class ObdDecoderTest {
 
         assertEquals(listOf("P0301"), pending.map { it.code })
         assertEquals(listOf("P0420"), permanent.map { it.code })
+    }
+
+    @Test
+    fun `recognizes explicit empty DTC replies instead of parser failures`() {
+        assertTrue(ObdDecoder.isExplicitNoDtcResponse("43 00", 0x43, true))
+        assertTrue(ObdDecoder.isExplicitNoDtcResponse("43 00 00 00 00 00 00", 0x43, false))
+        assertTrue(ObdDecoder.isExplicitNoDtcResponse("NO DATA", 0x43, null))
+        assertFalse(ObdDecoder.isExplicitNoDtcResponse("43 01 01 33", 0x43, true))
+        assertFalse(ObdDecoder.isExplicitNoDtcResponse("garbage", 0x43, null))
+    }
+
+    @Test
+    fun `recognizes OBD negative response code`() {
+        assertEquals(0x11, ObdDecoder.negativeResponseCode("7F 03 11", 0x03))
+        assertEquals(0x78, ObdDecoder.negativeResponseCode("7E8 03 7F 03 78", 0x03))
+        assertNull(ObdDecoder.negativeResponseCode("43 01 01 33", 0x03))
     }
 
     @Test
