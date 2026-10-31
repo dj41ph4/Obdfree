@@ -35,6 +35,7 @@ object ObdDecoder {
         hasCanCountByte: Boolean? = null,
     ): List<TroubleCode> {
         val payloads = buildList {
+            addAll(extractElmFormattedPayloads(response, positiveResponse))
             addAll(extractIsoTpPayloads(response, positiveResponse))
             addAll(extractSimplePayloads(response, positiveResponse))
         }
@@ -86,12 +87,76 @@ object ObdDecoder {
         throttlePercent = pidBytes(throttleResponse, 0x11, 1)?.firstOrNull()?.let { it * 100f / 255f },
     )
 
+    /**
+     * ELM327 CAF1 + headers off has its own presentation for ISO-TP messages:
+     *
+     * 009
+     * 0: 43 03 03 00 04 20
+     * 1: 01 71 00 00 00 00 00
+     *
+     * The first line is the total payload length in hexadecimal. Segment prefixes are
+     * presentation metadata from the ELM, not vehicle data, so they must be removed
+     * before DTC decoding.
+     */
+    private fun extractElmFormattedPayloads(
+        response: String,
+        positiveResponse: Int,
+    ): List<List<Int>> {
+        val lines = response.lines()
+        val completed = mutableListOf<List<Int>>()
+        var index = 0
+
+        while (index < lines.size) {
+            val lengthLine = lines[index].trim()
+            if (!ELM_LENGTH_LINE.matches(lengthLine)) {
+                index++
+                continue
+            }
+
+            val expectedLength = lengthLine.toIntOrNull(16) ?: run {
+                index++
+                continue
+            }
+
+            val bytes = mutableListOf<Int>()
+            var segmentIndex = index + 1
+            var sawSegment = false
+
+            while (segmentIndex < lines.size && bytes.size < expectedLength) {
+                val match = ELM_SEGMENT_LINE.matchEntire(lines[segmentIndex].trim()) ?: break
+                sawSegment = true
+
+                val segmentData = match.groupValues[2]
+                    .uppercase()
+                    .filter { it in HEX_CHARS }
+                    .chunked(2)
+                    .filter { it.length == 2 }
+                    .mapNotNull { it.toIntOrNull(16) }
+
+                bytes += segmentData
+                segmentIndex++
+            }
+
+            if (sawSegment && bytes.size >= expectedLength) {
+                val payload = bytes.take(expectedLength)
+                if (positiveResponse in payload) completed += payload
+                index = segmentIndex
+            } else {
+                index++
+            }
+        }
+
+        return completed
+    }
+
     private fun extractSimplePayloads(response: String, positiveResponse: Int): List<List<Int>> {
         val marker = positiveResponse.toString(16).padStart(2, '0').uppercase()
         val result = mutableListOf<List<Int>>()
 
         response.lineSequence().forEach { rawLine ->
-            if (looksLikeSpacedCanHeader(rawLine)) return@forEach
+            if (looksLikeSpacedCanHeader(rawLine) || looksLikeElmSegmentLine(rawLine)) {
+                return@forEach
+            }
 
             val compact = hexOnly(rawLine)
             var index = compact.indexOf(marker)
@@ -172,6 +237,9 @@ object ObdDecoder {
         return (first.length == 3 || first.length == 8) && first.all { it in HEX_CHARS }
     }
 
+    private fun looksLikeElmSegmentLine(rawLine: String): Boolean =
+        ELM_SEGMENT_LINE.matches(rawLine.trim())
+
     private fun looksLikeCountPrefixedPayload(payload: List<Int>, expectedCount: Int?): Boolean {
         val first = payload.firstOrNull() ?: return false
         if (expectedCount != null) return first == expectedCount && payload.size >= 1 + expectedCount * 2
@@ -233,6 +301,8 @@ object ObdDecoder {
         value.uppercase().filter { it in HEX_CHARS }
 
     private val HEX_CHARS = ('0'..'9') + ('A'..'F')
+    private val ELM_LENGTH_LINE = Regex("^[0-9A-Fa-f]{3}$")
+    private val ELM_SEGMENT_LINE = Regex("^([0-9A-Fa-f]):\\s*(.*)$")
 
     private val COMMON_DTC = mapOf(
         "P0100" to "Circuit du débitmètre d'air",
