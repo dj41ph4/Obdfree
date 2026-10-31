@@ -13,11 +13,27 @@ enum class ConnectionState {
     ERROR,
 }
 
+enum class DtcStatus {
+    STORED,
+    PENDING,
+    PERMANENT,
+}
+
 data class TroubleCode(
     val code: String,
     val category: String,
     val description: String? = null,
+    val statuses: Set<DtcStatus> = setOf(DtcStatus.STORED),
 )
+
+data class ClearHistory(
+    val warmupsSinceClear: Int? = null,
+    val distanceSinceClearKm: Int? = null,
+    val minutesSinceClear: Int? = null,
+) {
+    val hasData: Boolean
+        get() = warmupsSinceClear != null || distanceSinceClearKm != null || minutesSinceClear != null
+}
 
 data class LiveDataSnapshot(
     val rpm: Int? = null,
@@ -35,6 +51,7 @@ data class DiagnosticUiState(
     val adapterIdentity: String? = null,
     val protocol: String? = null,
     val troubleCodes: List<TroubleCode> = emptyList(),
+    val clearHistory: ClearHistory? = null,
     val liveData: LiveDataSnapshot = LiveDataSnapshot(),
     val isBusy: Boolean = false,
     val statusMessage: String = "Prêt",
