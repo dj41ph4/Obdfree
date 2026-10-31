@@ -16,6 +16,7 @@ class Elm327Client(
     private val transport: ObdTransport,
 ) {
     private var protocolNumber: String? = null
+    private var protocolDescription: String? = null
 
     suspend fun initialize(): ElmInitialization {
         val identity = command("ATZ", timeoutMs = 7_000)
@@ -26,8 +27,6 @@ class Elm327Client(
         command("ATS0")
         command("ATH0")
 
-        // Clone ELM327 units vary a lot. These are useful, but unsupported AT commands
-        // must not prevent an otherwise usable adapter from connecting.
         runCatching { command("ATAL") }
         runCatching { command("ATAT1") }
         runCatching { command("ATSTFF") }
@@ -36,9 +35,10 @@ class Elm327Client(
         val probe = retryCommand("0100", attempts = 2, timeoutMs = 15_000)
         throwIfAdapterError(probe)
 
-        val protocol = runCatching { command("ATDP") }
+        protocolDescription = runCatching { command("ATDP") }
             .getOrNull()
             ?.cleanHumanResponse()
+            ?.takeIf(String::isNotBlank)
 
         protocolNumber = runCatching { command("ATDPN") }
             .getOrNull()
@@ -47,7 +47,7 @@ class Elm327Client(
 
         return ElmInitialization(
             identity = identity.cleanHumanResponse().ifBlank { "ELM327 compatible" },
-            protocol = protocol,
+            protocol = protocolDescription,
             protocolNumber = protocolNumber,
         )
     }
@@ -56,13 +56,13 @@ class Elm327Client(
         val monitorResponse = runCatching { retryCommand("0101", attempts = 2, timeoutMs = 10_000) }
             .getOrNull()
         val monitor = monitorResponse?.let(ObdDecoder::decodeMonitorStatus)
-        val isCan = isCanProtocol()
+        val canCountByte = detectCanCountByte()
 
         var stored = readDtcMode(
             command = "03",
             responseMode = 0x43,
             expectedCount = monitor?.storedDtcCount,
-            hasCanCountByte = isCan,
+            hasCanCountByte = canCountByte,
         )
 
         if (monitor != null && monitor.storedDtcCount > 0 && stored.size < monitor.storedDtcCount) {
@@ -71,7 +71,7 @@ class Elm327Client(
                 response = headerResponse,
                 positiveResponse = 0x43,
                 expectedCount = monitor.storedDtcCount,
-                hasCanCountByte = isCan,
+                hasCanCountByte = canCountByte,
             )
         }
 
@@ -87,7 +87,7 @@ class Elm327Client(
                 command = "07",
                 responseMode = 0x47,
                 expectedCount = null,
-                hasCanCountByte = isCan,
+                hasCanCountByte = canCountByte,
             )
         }.getOrDefault(emptyList())
 
@@ -96,7 +96,7 @@ class Elm327Client(
                 command = "0A",
                 responseMode = 0x4A,
                 expectedCount = null,
-                hasCanCountByte = isCan,
+                hasCanCountByte = canCountByte,
             )
         }.getOrDefault(emptyList())
 
@@ -133,16 +133,11 @@ class Elm327Client(
 
         return withTimeout(timeoutMs) {
             val buffer = StringBuilder()
-
             while (true) {
                 val bytes = transport.readAvailable()
                 if (bytes.isNotEmpty()) {
-                    val text = bytes.decodeToString()
-                    buffer.append(text)
-
-                    if ('>' in buffer) {
-                        return@withTimeout sanitize(value, buffer.toString())
-                    }
+                    buffer.append(bytes.decodeToString())
+                    if ('>' in buffer) return@withTimeout sanitize(value, buffer.toString())
                 } else {
                     delay(15)
                 }
@@ -176,7 +171,7 @@ class Elm327Client(
         command: String,
         responseMode: Int,
         expectedCount: Int?,
-        hasCanCountByte: Boolean,
+        hasCanCountByte: Boolean?,
     ): List<TroubleCode> {
         val response = retryCommand(command, attempts = 2, timeoutMs = 12_000)
         if (response.contains("NO DATA", ignoreCase = true)) return emptyList()
@@ -241,14 +236,21 @@ class Elm327Client(
         if (failure != null) error("Réponse OBD: $failure")
     }
 
-    private fun isCanProtocol(): Boolean {
-        val value = protocolNumber
+    private fun detectCanCountByte(): Boolean? {
+        val normalizedNumber = protocolNumber
             ?.uppercase()
             ?.replace(" ", "")
             ?.removePrefix("A")
             .orEmpty()
-        val number = value.firstOrNull()?.digitToIntOrNull(16) ?: return false
-        return number in 6..9
+
+        normalizedNumber.firstOrNull()?.digitToIntOrNull(16)?.let { protocol ->
+            return protocol in 6..9
+        }
+
+        val description = protocolDescription?.uppercase().orEmpty()
+        if ("CAN" in description || "ISO 15765" in description) return true
+        if (description.isNotBlank() && "AUTO" !in description && "?" !in description) return false
+        return null
     }
 
     private fun String.cleanHumanResponse(): String =
