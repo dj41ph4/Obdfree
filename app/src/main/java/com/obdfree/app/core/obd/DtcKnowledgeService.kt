@@ -15,14 +15,22 @@ class DtcKnowledgeService(
     suspend fun enrich(codes: List<TroubleCode>): List<TroubleCode> = withContext(Dispatchers.IO) {
         if (codes.isEmpty()) return@withContext emptyList()
 
-        val remoteTitles = runCatching { loadTitles(codes.map { it.code }.toSet()) }
-            .getOrDefault(emptyMap())
+        val wanted = codes
+            .filter { LOCAL_FRENCH[it.code] == null && it.description == null }
+            .map { it.code }
+            .toSet()
+
+        val remoteTitles = if (wanted.isEmpty()) {
+            emptyMap()
+        } else {
+            runCatching { loadTitles(wanted) }.getOrDefault(emptyMap())
+        }
 
         codes.map { code ->
             val french = LOCAL_FRENCH[code.code]
-                ?: remoteTitles[code.code]?.let { FrenchDtcTranslator.translate(it, code) }
                 ?: code.description
-                ?: fallbackFrench(code)
+                ?: remoteTitles[code.code]?.let { FrenchDtcTranslator.translate(it, code) }
+                ?: fallbackFrench()
 
             code.copy(description = french)
         }
@@ -67,13 +75,8 @@ class DtcKnowledgeService(
         }
     }
 
-    private fun fallbackFrench(code: TroubleCode): String = when (code.code.firstOrNull()) {
-        'P' -> "Défaut générique du groupe motopropulseur détecté."
-        'C' -> "Défaut générique du châssis détecté."
-        'B' -> "Défaut générique de carrosserie détecté."
-        'U' -> "Défaut générique de communication réseau détecté."
-        else -> "Défaut OBD-II détecté."
-    }
+    private fun fallbackFrench(): String =
+        "Description non disponible dans la base OBD-II générique. Ce code peut dépendre du constructeur."
 
     private companion object {
         const val OBDEX_URL = "https://foerbsnavi.github.io/OBDex/generic.min.json"
@@ -134,12 +137,10 @@ private object FrenchDtcTranslator {
         "Fuel Level" to "Niveau de carburant",
         "Throttle Position" to "Position du papillon",
         "Control Module" to "Calculateur",
-        "Communication" to "Communication",
         "Circuit Range/Performance" to "Plage / performances du circuit",
         "Range/Performance" to "Plage / performances",
         "Circuit High" to "Signal élevé du circuit",
         "Circuit Low" to "Signal faible du circuit",
-        "Circuit" to "Circuit",
         "Sensor" to "Capteur",
         "Bank 1" to "rangée 1",
         "Bank 2" to "rangée 2",
@@ -174,13 +175,7 @@ private object FrenchDtcTranslator {
         }
 
         if (changes == 0) {
-            return when (code.code.firstOrNull()) {
-                'P' -> "Défaut générique du groupe motopropulseur."
-                'C' -> "Défaut générique du châssis."
-                'B' -> "Défaut générique de carrosserie."
-                'U' -> "Défaut générique de communication réseau."
-                else -> "Défaut OBD-II générique."
-            }
+            return "Description OBD-II disponible en anglais uniquement pour ${code.code}."
         }
 
         return translated
