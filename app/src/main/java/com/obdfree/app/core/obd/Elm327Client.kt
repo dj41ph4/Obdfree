@@ -9,43 +9,102 @@ import kotlinx.coroutines.withTimeout
 data class ElmInitialization(
     val identity: String,
     val protocol: String?,
+    val protocolNumber: String? = null,
 )
 
 class Elm327Client(
     private val transport: ObdTransport,
 ) {
+    private var protocolNumber: String? = null
+
     suspend fun initialize(): ElmInitialization {
-        val identity = command("ATZ", timeoutMs = 5_000)
-        delay(250)
+        val identity = command("ATZ", timeoutMs = 7_000)
+        delay(700)
 
         command("ATE0")
         command("ATL0")
         command("ATS0")
         command("ATH0")
-        command("ATAT1")
+
+        // Clone ELM327 units vary a lot. These are useful, but unsupported AT commands
+        // must not prevent an otherwise usable adapter from connecting.
+        runCatching { command("ATAL") }
+        runCatching { command("ATAT1") }
+        runCatching { command("ATSTFF") }
         command("ATSP0")
 
-        // Force auto protocol detection before asking the adapter which one won.
-        runCatching { command("0100", timeoutMs = 8_000) }
+        val probe = retryCommand("0100", attempts = 2, timeoutMs = 15_000)
+        throwIfAdapterError(probe)
+
         val protocol = runCatching { command("ATDP") }
             .getOrNull()
             ?.cleanHumanResponse()
 
+        protocolNumber = runCatching { command("ATDPN") }
+            .getOrNull()
+            ?.cleanHumanResponse()
+            ?.takeIf(String::isNotBlank)
+
         return ElmInitialization(
-            identity = identity.cleanHumanResponse()
-                .ifBlank { "ELM327 compatible" },
+            identity = identity.cleanHumanResponse().ifBlank { "ELM327 compatible" },
             protocol = protocol,
+            protocolNumber = protocolNumber,
         )
     }
 
     suspend fun readTroubleCodes(): List<TroubleCode> {
-        val response = command("03", timeoutMs = 8_000)
-        throwIfAdapterError(response)
-        return ObdDecoder.decodeTroubleCodes(response)
+        val monitorResponse = runCatching { retryCommand("0101", attempts = 2, timeoutMs = 10_000) }
+            .getOrNull()
+        val monitor = monitorResponse?.let(ObdDecoder::decodeMonitorStatus)
+        val isCan = isCanProtocol()
+
+        var stored = readDtcMode(
+            command = "03",
+            responseMode = 0x43,
+            expectedCount = monitor?.storedDtcCount,
+            hasCanCountByte = isCan,
+        )
+
+        if (monitor != null && monitor.storedDtcCount > 0 && stored.size < monitor.storedDtcCount) {
+            val headerResponse = readWithHeaders("03")
+            stored = ObdDecoder.decodeTroubleCodes(
+                response = headerResponse,
+                positiveResponse = 0x43,
+                expectedCount = monitor.storedDtcCount,
+                hasCanCountByte = isCan,
+            )
+        }
+
+        if (monitor != null && monitor.storedDtcCount > 0 && stored.size < monitor.storedDtcCount) {
+            error(
+                "Le calculateur annonce ${monitor.storedDtcCount} défaut(s), " +
+                    "mais la réponse de l’ELM327 n’a pas pu être décodée correctement.",
+            )
+        }
+
+        val pending = runCatching {
+            readDtcMode(
+                command = "07",
+                responseMode = 0x47,
+                expectedCount = null,
+                hasCanCountByte = isCan,
+            )
+        }.getOrDefault(emptyList())
+
+        val permanent = runCatching {
+            readDtcMode(
+                command = "0A",
+                responseMode = 0x4A,
+                expectedCount = null,
+                hasCanCountByte = isCan,
+            )
+        }.getOrDefault(emptyList())
+
+        return (stored + pending + permanent).distinctBy { it.code }
     }
 
     suspend fun clearTroubleCodes(): Boolean {
-        val response = command("04", timeoutMs = 8_000)
+        val response = command("04", timeoutMs = 10_000)
         throwIfAdapterError(response)
         val compact = response.uppercase().filterNot(Char::isWhitespace)
         return compact.contains("44") || compact.contains("OK")
@@ -67,7 +126,7 @@ class Elm327Client(
 
     suspend fun command(
         value: String,
-        timeoutMs: Long = 4_000,
+        timeoutMs: Long = 5_000,
     ): String {
         drainInput()
         transport.write((value.trim() + "\r").encodeToByteArray())
@@ -81,11 +140,11 @@ class Elm327Client(
                     val text = bytes.decodeToString()
                     buffer.append(text)
 
-                    if ('>' in text || '>' in buffer) {
+                    if ('>' in buffer) {
                         return@withTimeout sanitize(value, buffer.toString())
                     }
                 } else {
-                    delay(18)
+                    delay(15)
                 }
             }
 
@@ -94,11 +153,59 @@ class Elm327Client(
         }
     }
 
+    private suspend fun retryCommand(
+        value: String,
+        attempts: Int,
+        timeoutMs: Long,
+    ): String {
+        var lastError: Throwable? = null
+        repeat(attempts) { attempt ->
+            try {
+                val response = command(value, timeoutMs)
+                if (!containsTransientFailure(response) || attempt == attempts - 1) return response
+            } catch (error: Throwable) {
+                lastError = error
+                if (attempt == attempts - 1) throw error
+            }
+            delay(180)
+        }
+        throw lastError ?: IllegalStateException("Aucune réponse ELM327")
+    }
+
+    private suspend fun readDtcMode(
+        command: String,
+        responseMode: Int,
+        expectedCount: Int?,
+        hasCanCountByte: Boolean,
+    ): List<TroubleCode> {
+        val response = retryCommand(command, attempts = 2, timeoutMs = 12_000)
+        if (response.contains("NO DATA", ignoreCase = true)) return emptyList()
+        throwIfAdapterError(response)
+
+        return ObdDecoder.decodeTroubleCodes(
+            response = response,
+            positiveResponse = responseMode,
+            expectedCount = expectedCount,
+            hasCanCountByte = hasCanCountByte,
+        )
+    }
+
+    private suspend fun readWithHeaders(value: String): String {
+        return try {
+            runCatching { command("ATS1") }
+            runCatching { command("ATH1") }
+            retryCommand(value, attempts = 2, timeoutMs = 12_000)
+        } finally {
+            runCatching { command("ATH0") }
+            runCatching { command("ATS0") }
+        }
+    }
+
     private suspend fun drainInput() {
-        repeat(8) {
+        repeat(12) {
             val bytes = transport.readAvailable()
             if (bytes.isEmpty()) return
-            delay(10)
+            delay(8)
         }
     }
 
@@ -109,23 +216,39 @@ class Elm327Client(
             .lineSequence()
             .map(String::trim)
             .filter(String::isNotBlank)
-            .filterNot { it.equals(command.trim(), ignoreCase = true) }
+            .filterNot { normalizeCommand(it) == normalizeCommand(command) }
             .joinToString("\n")
+
+    private fun normalizeCommand(value: String): String =
+        value.uppercase().filter { it.isLetterOrDigit() }
+
+    private fun containsTransientFailure(response: String): Boolean {
+        val upper = response.uppercase()
+        return upper.contains("STOPPED") || upper.contains("BUS INIT")
+    }
 
     private fun throwIfAdapterError(response: String) {
         val upper = response.uppercase()
         val failure = listOf(
-            "NO DATA",
             "UNABLE TO CONNECT",
             "BUS ERROR",
             "CAN ERROR",
             "STOPPED",
+            "BUS INIT: ERROR",
             "?",
         ).firstOrNull(upper::contains)
 
-        if (failure != null) {
-            error("Réponse OBD: $failure")
-        }
+        if (failure != null) error("Réponse OBD: $failure")
+    }
+
+    private fun isCanProtocol(): Boolean {
+        val value = protocolNumber
+            ?.uppercase()
+            ?.replace(" ", "")
+            ?.removePrefix("A")
+            .orEmpty()
+        val number = value.firstOrNull()?.digitToIntOrNull(16) ?: return false
+        return number in 6..9
     }
 
     private fun String.cleanHumanResponse(): String =
