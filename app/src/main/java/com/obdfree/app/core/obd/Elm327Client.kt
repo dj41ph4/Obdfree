@@ -49,9 +49,11 @@ class Elm327Client(
         val monitorStatuses = monitorResponse
             ?.let(ObdDecoder::decodeMonitorStatuses)
             .orEmpty()
-        val expectedStoredCount = monitorStatuses
-            .takeIf { it.isNotEmpty() }
-            ?.sumOf { it.storedDtcCount }
+
+        // PID 01 can be answered by more than one ECU. A strict count comparison is only
+        // valid when a single ECU supplied the count; otherwise duplicated DTCs across ECUs
+        // can make a de-duplicated list look falsely incomplete.
+        val expectedStoredCount = monitorStatuses.singleOrNull()?.storedDtcCount
         val canCountByte = detectCanCountByte()
 
         var stored = readDtcMode(
@@ -413,7 +415,7 @@ class Elm327Client(
     }
 
     private fun detectCanCountByte(): Boolean? {
-        normalizedProtocolNumber()?.digitToIntOrNull(16)?.let { protocol ->
+        normalizedProtocolNumber()?.toIntOrNull(16)?.let { protocol ->
             return protocol in 6..9
         }
 
