@@ -22,6 +22,30 @@ class ObdDecoderTest {
     }
 
     @Test
+    fun `decodes compact ELM response without spaces`() {
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = "430201330234",
+            positiveResponse = 0x43,
+            expectedCount = 2,
+            hasCanCountByte = true,
+        )
+
+        assertEquals(listOf("P0133", "P0234"), codes.map { it.code })
+    }
+
+    @Test
+    fun `uses monitor count when clone does not report protocol`() {
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = "43 02 03 00 04 20",
+            positiveResponse = 0x43,
+            expectedCount = 2,
+            hasCanCountByte = null,
+        )
+
+        assertEquals(listOf("P0300", "P0420"), codes.map { it.code })
+    }
+
+    @Test
     fun `does not mistake non CAN DTC high byte for count`() {
         val response = "43 02 03 00 00 00 00"
 
