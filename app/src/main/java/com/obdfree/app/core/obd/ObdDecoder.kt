@@ -10,23 +10,39 @@ object ObdDecoder {
         val storedDtcCount: Int,
     )
 
-    fun decodeMonitorStatus(response: String): MonitorStatus? {
+    fun decodeMonitorStatus(response: String): MonitorStatus? =
+        decodeMonitorStatuses(response).firstOrNull()
+
+    fun decodeMonitorStatuses(response: String): List<MonitorStatus> {
+        val result = mutableListOf<MonitorStatus>()
+
         response.lineSequence().forEach { rawLine ->
             val compact = hexOnly(rawLine)
-            val marker = compact.indexOf("4101")
-            if (marker < 0) return@forEach
+            var marker = compact.indexOf("4101")
 
-            val data = compact.drop(marker + 4)
-            if (data.length < 2) return@forEach
-
-            val statusByte = data.substring(0, 2).toIntOrNull(16) ?: return@forEach
-            return MonitorStatus(
-                milOn = statusByte and 0x80 != 0,
-                storedDtcCount = statusByte and 0x7F,
-            )
+            while (marker >= 0) {
+                val data = compact.drop(marker + 4)
+                if (data.length >= 2) {
+                    val statusByte = data.substring(0, 2).toIntOrNull(16)
+                    if (statusByte != null) {
+                        result += MonitorStatus(
+                            milOn = statusByte and 0x80 != 0,
+                            storedDtcCount = statusByte and 0x7F,
+                        )
+                    }
+                }
+                marker = compact.indexOf("4101", startIndex = marker + 4)
+            }
         }
-        return null
+
+        return result
     }
+
+    fun decodeMode01Byte(response: String, pid: Int): Int? =
+        pidBytes(response, pid, 1)?.firstOrNull()
+
+    fun decodeMode01Word(response: String, pid: Int): Int? =
+        pidBytes(response, pid, 2)?.let { bytes -> (bytes[0] shl 8) or bytes[1] }
 
     fun decodeTroubleCodes(
         response: String,
@@ -87,17 +103,6 @@ object ObdDecoder {
         throttlePercent = pidBytes(throttleResponse, 0x11, 1)?.firstOrNull()?.let { it * 100f / 255f },
     )
 
-    /**
-     * ELM327 CAF1 + headers off has its own presentation for ISO-TP messages:
-     *
-     * 009
-     * 0: 43 03 03 00 04 20
-     * 1: 01 71 00 00 00 00 00
-     *
-     * The first line is the total payload length in hexadecimal. Segment prefixes are
-     * presentation metadata from the ELM, not vehicle data, so they must be removed
-     * before DTC decoding.
-     */
     private fun extractElmFormattedPayloads(
         response: String,
         positiveResponse: Int,
