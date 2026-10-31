@@ -77,6 +77,23 @@ class ObdDecoderTest {
     }
 
     @Test
+    fun `does not double parse response marker inside CAN continuation data`() {
+        val response = """
+            7E8 10 08 43 03 01 33 03 00
+            7E8 21 43 21 00 00 00 00 00
+        """.trimIndent()
+
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = response,
+            positiveResponse = 0x43,
+            expectedCount = 3,
+            hasCanCountByte = true,
+        )
+
+        assertEquals(listOf("P0133", "P0300", "C0321"), codes.map { it.code })
+    }
+
+    @Test
     fun `ignores ELM searching noise and padding`() {
         val response = """
             SEARCHING...
