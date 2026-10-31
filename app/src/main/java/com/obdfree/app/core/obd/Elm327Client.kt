@@ -1,6 +1,8 @@
 package com.obdfree.app.core.obd
 
 import com.obdfree.app.core.transport.ObdTransport
+import com.obdfree.app.model.ClearHistory
+import com.obdfree.app.model.DtcStatus
 import com.obdfree.app.model.LiveDataSnapshot
 import com.obdfree.app.model.TroubleCode
 import kotlinx.coroutines.TimeoutCancellationException
@@ -44,29 +46,35 @@ class Elm327Client(
         val monitorResponse = runCatching {
             retryCommand("0101", attempts = 2, timeoutMs = 10_000)
         }.getOrNull()
-        val monitor = monitorResponse?.let(ObdDecoder::decodeMonitorStatus)
+        val monitorStatuses = monitorResponse
+            ?.let(ObdDecoder::decodeMonitorStatuses)
+            .orEmpty()
+        val expectedStoredCount = monitorStatuses
+            .takeIf { it.isNotEmpty() }
+            ?.sumOf { it.storedDtcCount }
         val canCountByte = detectCanCountByte()
 
         var stored = readDtcMode(
             command = "03",
             responseMode = 0x43,
-            expectedCount = monitor?.storedDtcCount,
+            expectedCount = expectedStoredCount,
             hasCanCountByte = canCountByte,
+            status = DtcStatus.STORED,
         )
 
-        if (monitor != null && monitor.storedDtcCount > 0 && stored.size < monitor.storedDtcCount) {
+        if (expectedStoredCount != null && expectedStoredCount > 0 && stored.size < expectedStoredCount) {
             val headerResponse = readWithHeaders("03")
             stored = ObdDecoder.decodeTroubleCodes(
                 response = headerResponse,
                 positiveResponse = 0x43,
-                expectedCount = monitor.storedDtcCount,
+                expectedCount = expectedStoredCount,
                 hasCanCountByte = canCountByte,
-            )
+            ).map { it.copy(statuses = setOf(DtcStatus.STORED)) }
         }
 
-        if (monitor != null && monitor.storedDtcCount > 0 && stored.size < monitor.storedDtcCount) {
+        if (expectedStoredCount != null && expectedStoredCount > 0 && stored.size < expectedStoredCount) {
             error(
-                "Le calculateur annonce ${monitor.storedDtcCount} défaut(s), " +
+                "Le calculateur annonce $expectedStoredCount défaut(s), " +
                     "mais la réponse de l’ELM327 n’a pas pu être décodée correctement.",
             )
         }
@@ -77,6 +85,7 @@ class Elm327Client(
                 responseMode = 0x47,
                 expectedCount = null,
                 hasCanCountByte = canCountByte,
+                status = DtcStatus.PENDING,
             )
         }.getOrDefault(emptyList())
 
@@ -86,10 +95,23 @@ class Elm327Client(
                 responseMode = 0x4A,
                 expectedCount = null,
                 hasCanCountByte = canCountByte,
+                status = DtcStatus.PERMANENT,
             )
         }.getOrDefault(emptyList())
 
-        return (stored + pending + permanent).distinctBy { it.code }
+        return mergeStatuses(stored + pending + permanent)
+    }
+
+    suspend fun readClearHistory(): ClearHistory {
+        val warmups = readMode01Byte("0130", 0x30)
+        val distance = readMode01Word("0131", 0x31)
+        val minutes = readMode01Word("014E", 0x4E)
+
+        return ClearHistory(
+            warmupsSinceClear = warmups,
+            distanceSinceClearKm = distance,
+            minutesSinceClear = minutes,
+        )
     }
 
     suspend fun clearTroubleCodes(): Boolean {
@@ -143,9 +165,6 @@ class Elm327Client(
         requiredAt("ATS0")
         requiredAt("ATH0")
 
-        // Do not trust the state left by another application. These are defaults on a
-        // genuine ELM327, but explicitly restoring them prevents broken multi-frame CAN
-        // replies when a previous tool disabled formatting or flow control.
         bestEffortAt("ATCAF1")
         bestEffortAt("ATCFC1")
         bestEffortAt("ATFCSM0")
@@ -165,9 +184,6 @@ class Elm327Client(
             return
         }
 
-        // Some clones claim to support automatic protocol detection but either return
-        // protocol 0 or never actually initialise the vehicle bus. python-OBD uses the
-        // same strategy: fall back to trying the standard protocols one by one.
         bestEffortAt("ATPC")
 
         for (protocol in PROTOCOL_TRY_ORDER) {
@@ -251,8 +267,6 @@ class Elm327Client(
                 lastError = error
                 if (attempt == attempts - 1) throw error
 
-                // A simple timeout is often only a slow ECU. Do not reset the adapter on
-                // the first timeout; just give the same request another chance.
                 if (error !is TimeoutCancellationException) {
                     runCatching { recoverAdapterSession() }
                 }
@@ -269,8 +283,6 @@ class Elm327Client(
         recovering = true
 
         try {
-            // AndrOBD uses a warm start for BUFFER FULL / RX ERROR / DATA ERROR class
-            // failures. It is less invasive than dropping Bluetooth and reconnecting.
             runCatching { command("ATWS", timeoutMs = 7_000) }
             delay(350)
             configureAdapter()
@@ -291,6 +303,7 @@ class Elm327Client(
         responseMode: Int,
         expectedCount: Int?,
         hasCanCountByte: Boolean?,
+        status: DtcStatus,
     ): List<TroubleCode> {
         val response = retryCommand(command, attempts = 2, timeoutMs = 12_000)
         if (response.contains("NO DATA", ignoreCase = true)) return emptyList()
@@ -301,7 +314,21 @@ class Elm327Client(
             positiveResponse = responseMode,
             expectedCount = expectedCount,
             hasCanCountByte = hasCanCountByte,
-        )
+        ).map { it.copy(statuses = setOf(status)) }
+    }
+
+    private suspend fun readMode01Byte(command: String, pid: Int): Int? {
+        val response = runCatching { retryCommand(command, attempts = 2, timeoutMs = 7_000) }
+            .getOrNull() ?: return null
+        if (response.contains("NO DATA", ignoreCase = true)) return null
+        return ObdDecoder.decodeMode01Byte(response, pid)
+    }
+
+    private suspend fun readMode01Word(command: String, pid: Int): Int? {
+        val response = runCatching { retryCommand(command, attempts = 2, timeoutMs = 7_000) }
+            .getOrNull() ?: return null
+        if (response.contains("NO DATA", ignoreCase = true)) return null
+        return ObdDecoder.decodeMode01Word(response, pid)
     }
 
     private suspend fun readWithHeaders(value: String): String {
@@ -408,6 +435,19 @@ class Elm327Client(
             ?.toString()
     }
 
+    private fun mergeStatuses(codes: List<TroubleCode>): List<TroubleCode> {
+        val merged = LinkedHashMap<String, TroubleCode>()
+        codes.forEach { code ->
+            val existing = merged[code.code]
+            merged[code.code] = if (existing == null) {
+                code
+            } else {
+                existing.copy(statuses = existing.statuses + code.statuses)
+            }
+        }
+        return merged.values.toList()
+    }
+
     private fun String.cleanHumanResponse(): String =
         lineSequence()
             .map(String::trim)
@@ -425,8 +465,6 @@ class Elm327Client(
         const val MANUAL_PROTOCOL_TIMEOUT_MS = 12_000L
 
         val VOLTAGE_REGEX = Regex("([0-9]+(?:[.,][0-9]+)?)\\s*[Vv]?")
-
-        // Same pragmatic fallback order used by python-OBD after automatic mode fails.
         val PROTOCOL_TRY_ORDER = listOf("6", "8", "1", "7", "9", "2", "3", "4", "5")
 
         val PROTOCOL_NAMES = mapOf(
