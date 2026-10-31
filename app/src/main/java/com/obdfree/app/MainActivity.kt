@@ -15,14 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.obdfree.app.service.ContinuousClearService
 import com.obdfree.app.ui.ObdFreeApp
 import com.obdfree.app.ui.theme.ObdTheme
-import com.obdfree.app.update.AppUpdateState
 import com.obdfree.app.update.AppUpdater
 import kotlinx.coroutines.launch
 import java.io.File
@@ -31,8 +28,6 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: ObdViewModel by viewModels()
     private val updater by lazy { AppUpdater(this) }
-
-    private var updateState by mutableStateOf<AppUpdateState>(AppUpdateState.Checking)
     private var pendingUpdateApk: File? = null
 
     private val bluetoothPermissionLauncher =
@@ -46,7 +41,6 @@ class MainActivity : ComponentActivity() {
             if (updater.canRequestPackageInstalls()) {
                 pendingUpdateApk = null
                 runCatching { updater.install(this, apk) }
-                    .onFailure { updateState = AppUpdateState.Error("Installation impossible") }
             }
         }
 
@@ -60,8 +54,6 @@ class MainActivity : ComponentActivity() {
 
                 ObdFreeApp(
                     state = state,
-                    updateState = updateState,
-                    onInstallUpdate = ::installAvailableUpdate,
                     onRequestBluetoothPermission = ::requestBluetoothPermission,
                     onRefreshAdapters = { viewModel.refreshPairedAdapters() },
                     onSelectAdapter = viewModel::selectAdapter,
@@ -84,39 +76,17 @@ class MainActivity : ComponentActivity() {
 
     private fun checkForUpdates() {
         lifecycleScope.launch {
-            updateState = AppUpdateState.Checking
+            val release = runCatching { updater.checkForUpdate() }.getOrNull() ?: return@launch
+            val apk = runCatching { updater.downloadAndVerify(release) }.getOrNull() ?: return@launch
+            pendingUpdateApk = apk
 
-            try {
-                val release = updater.checkForUpdate()
-                if (release == null) {
-                    updateState = AppUpdateState.UpToDate
-                    return@launch
-                }
-
-                updateState = AppUpdateState.Downloading(release.version)
-                val apk = updater.downloadAndVerify(release)
-                updateState = AppUpdateState.Ready(release, apk)
-            } catch (error: Throwable) {
-                updateState = AppUpdateState.Error(
-                    error.message?.lineSequence()?.firstOrNull()?.take(120)
-                        ?: "Vérification des mises à jour impossible",
-                )
+            if (updater.canRequestPackageInstalls()) {
+                pendingUpdateApk = null
+                runCatching { updater.install(this@MainActivity, apk) }
+            } else {
+                runCatching { unknownSourcesLauncher.launch(updater.unknownSourcesIntent()) }
             }
         }
-    }
-
-    private fun installAvailableUpdate() {
-        val ready = updateState as? AppUpdateState.Ready ?: return
-
-        if (!updater.canRequestPackageInstalls()) {
-            pendingUpdateApk = ready.apk
-            runCatching { unknownSourcesLauncher.launch(updater.unknownSourcesIntent()) }
-                .onFailure { updateState = AppUpdateState.Error("Autorisation d’installation requise") }
-            return
-        }
-
-        runCatching { updater.install(this, ready.apk) }
-            .onFailure { updateState = AppUpdateState.Error("Installation impossible") }
     }
 
     private fun requestBluetoothPermission() {
