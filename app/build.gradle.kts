@@ -3,13 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val releaseKeystorePath = System.getenv("OBDFREE_KEYSTORE_PATH")
-val releaseKeystorePassword = System.getenv("OBDFREE_KEYSTORE_PASSWORD")
-val releaseRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
-
-if (releaseRequested && (releaseKeystorePath.isNullOrBlank() || releaseKeystorePassword.isNullOrBlank())) {
-    throw GradleException("Release signing secrets are missing. Refusing to build an unsigned OBDfree release.")
-}
+val releaseStorePath = System.getenv("OBDFREE_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("OBDFREE_KEYSTORE_PASSWORD")
 
 android {
     namespace = "com.obdfree.app"
@@ -24,20 +19,20 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            if (!releaseKeystorePath.isNullOrBlank() && !releaseKeystorePassword.isNullOrBlank()) {
-                storeFile = file(releaseKeystorePath)
-                storePassword = releaseKeystorePassword
+        if (!releaseStorePath.isNullOrBlank() && !releaseStorePassword.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(releaseStorePath)
+                storePassword = releaseStorePassword
                 keyAlias = "obdfree-release"
-                keyPassword = releaseKeystorePassword
+                keyPassword = releaseStorePassword
             }
         }
     }
 
     buildTypes {
         getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -64,7 +59,6 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
 
