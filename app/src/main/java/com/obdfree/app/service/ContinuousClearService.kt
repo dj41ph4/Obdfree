@@ -25,8 +25,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.text.DateFormat
-import java.util.Date
 
 class ContinuousClearService : Service() {
 
@@ -55,7 +53,7 @@ class ContinuousClearService : Service() {
         }
 
         prefs.edit().putBoolean(ObdPrefs.CONTINUOUS_CLEAR, true).apply()
-        startAsForeground("Connexion au dongle OBD…")
+        startAsForeground()
 
         if (loopJob?.isActive != true) {
             loopJob = scope.launch { clearLoop() }
@@ -85,7 +83,6 @@ class ContinuousClearService : Service() {
                     ?: error("Aucun adaptateur OBD mémorisé")
 
                 if (!transport.isConnected) {
-                    updateNotification("Reconnexion au dongle OBD…")
                     transport.connect(address)
                     client.initialize()
                 }
@@ -93,23 +90,20 @@ class ContinuousClearService : Service() {
                 val cleared = client.clearTroubleCodes()
                 if (!cleared) error("Le véhicule n’a pas confirmé l’effacement")
 
-                val now = System.currentTimeMillis()
                 prefs.edit()
-                    .putLong(ObdPrefs.CONTINUOUS_LAST_RUN, now)
+                    .putLong(ObdPrefs.CONTINUOUS_LAST_RUN, System.currentTimeMillis())
                     .remove(ObdPrefs.CONTINUOUS_LAST_ERROR)
                     .apply()
-
-                val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now))
-                updateNotification("Actif • dernier effacement à $time")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                val message = friendlyError(error)
+                // Never surface OBD/vehicle errors as notifications. Keep the technical
+                // foreground-service notification generic and silent; the last error is
+                // only stored for display inside OBDfree when the user opens the app.
                 prefs.edit()
-                    .putString(ObdPrefs.CONTINUOUS_LAST_ERROR, message)
+                    .putString(ObdPrefs.CONTINUOUS_LAST_ERROR, friendlyError(error))
                     .apply()
 
-                updateNotification("Reconnexion automatique • $message")
                 runCatching { transport.disconnect() }
             }
 
@@ -117,7 +111,7 @@ class ContinuousClearService : Service() {
         }
     }
 
-    private fun startAsForeground(text: String) {
+    private fun startAsForeground() {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         } else {
@@ -127,25 +121,20 @@ class ContinuousClearService : Service() {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification(text),
+            buildNotification(),
             type,
         )
     }
 
-    private fun updateNotification(text: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
-    }
-
-    private fun buildNotification(text: String) =
+    private fun buildNotification() =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_obdfree)
-            .setContentTitle("OBDfree • Effacement continu")
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText("$text\nEffacement OBD-II automatique toutes les 30 secondes."))
+            .setContentTitle("OBDfree")
+            .setContentText("Effacement continu actif")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
+            .setShowWhen(false)
             .setContentIntent(
                 PendingIntent.getActivity(
                     this,
@@ -171,12 +160,13 @@ class ContinuousClearService : Service() {
 
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Effacement OBD continu",
-            NotificationManager.IMPORTANCE_LOW,
+            "Service OBDfree",
+            NotificationManager.IMPORTANCE_MIN,
         ).apply {
             description = "Maintient la connexion OBDfree active en arrière-plan."
             setSound(null, null)
             enableVibration(false)
+            setShowBadge(false)
         }
 
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -196,11 +186,11 @@ class ContinuousClearService : Service() {
     private fun friendlyError(error: Throwable): String {
         val raw = error.message.orEmpty()
         return when {
-            raw.contains("aucun calculateur", ignoreCase = true) -> "calculateur indisponible"
-            raw.contains("UNABLE TO CONNECT", ignoreCase = true) -> "véhicule non joignable"
+            raw.contains("aucun calculateur", ignoreCase = true) -> "Calculateur indisponible"
+            raw.contains("UNABLE TO CONNECT", ignoreCase = true) -> "Véhicule non joignable"
             raw.contains("Bluetooth", ignoreCase = true) -> "Bluetooth indisponible"
-            raw.isNotBlank() -> raw.lineSequence().first().take(80)
-            else -> "communication OBD interrompue"
+            raw.isNotBlank() -> raw.lineSequence().first().take(120)
+            else -> "Communication OBD interrompue"
         }
     }
 
