@@ -3,6 +3,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseKeystorePath = System.getenv("OBDFREE_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("OBDFREE_KEYSTORE_PASSWORD")
+val releaseRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+
+if (releaseRequested && (releaseKeystorePath.isNullOrBlank() || releaseKeystorePassword.isNullOrBlank())) {
+    throw GradleException("Release signing secrets are missing. Refusing to build an unsigned OBDfree release.")
+}
+
 android {
     namespace = "com.obdfree.app"
     compileSdk = 36
@@ -11,8 +19,26 @@ android {
         applicationId = "com.obdfree.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.0.5"
+        versionCode = 6
+        versionName = "0.0.6"
+    }
+
+    signingConfigs {
+        create("release") {
+            if (!releaseKeystorePath.isNullOrBlank() && !releaseKeystorePassword.isNullOrBlank()) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = "obdfree-release"
+                keyPassword = releaseKeystorePassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures {
@@ -31,7 +57,6 @@ android {
 }
 
 dependencies {
-    // Compose 1.11.x: stable production line compatible with compileSdk 36.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     implementation(composeBom)
@@ -39,6 +64,7 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
 
