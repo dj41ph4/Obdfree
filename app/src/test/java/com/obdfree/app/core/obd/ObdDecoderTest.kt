@@ -9,15 +9,12 @@ class ObdDecoderTest {
 
     @Test
     fun `decodes CAN mode 03 count byte correctly`() {
-        val response = "43 02 03 00 01 30"
-
         val codes = ObdDecoder.decodeTroubleCodes(
-            response = response,
+            response = "43 02 03 00 01 30",
             positiveResponse = 0x43,
             expectedCount = 2,
             hasCanCountByte = true,
         )
-
         assertEquals(listOf("P0300", "P0130"), codes.map { it.code })
     }
 
@@ -29,7 +26,6 @@ class ObdDecoderTest {
             expectedCount = 2,
             hasCanCountByte = true,
         )
-
         assertEquals(listOf("P0133", "P0234"), codes.map { it.code })
     }
 
@@ -41,21 +37,17 @@ class ObdDecoderTest {
             expectedCount = 2,
             hasCanCountByte = null,
         )
-
         assertEquals(listOf("P0300", "P0420"), codes.map { it.code })
     }
 
     @Test
     fun `does not mistake non CAN DTC high byte for count`() {
-        val response = "43 02 03 00 00 00 00"
-
         val codes = ObdDecoder.decodeTroubleCodes(
-            response = response,
+            response = "43 02 03 00 00 00 00",
             positiveResponse = 0x43,
             expectedCount = 1,
             hasCanCountByte = false,
         )
-
         assertEquals(listOf("P0203"), codes.map { it.code })
     }
 
@@ -72,7 +64,23 @@ class ObdDecoderTest {
             expectedCount = 3,
             hasCanCountByte = true,
         )
+        assertEquals(listOf("P0133", "P0300", "P0420"), codes.map { it.code })
+    }
 
+    @Test
+    fun `reassembles native ELM CAF1 segmented response`() {
+        val response = """
+            008
+            0: 43 03 01 33 03 00
+            1: 04 20
+        """.trimIndent()
+
+        val codes = ObdDecoder.decodeTroubleCodes(
+            response = response,
+            positiveResponse = 0x43,
+            expectedCount = 3,
+            hasCanCountByte = true,
+        )
         assertEquals(listOf("P0133", "P0300", "P0420"), codes.map { it.code })
     }
 
@@ -89,7 +97,6 @@ class ObdDecoderTest {
             expectedCount = 3,
             hasCanCountByte = true,
         )
-
         assertEquals(listOf("P0133", "P0300", "C0321"), codes.map { it.code })
     }
 
@@ -106,7 +113,6 @@ class ObdDecoderTest {
             expectedCount = 1,
             hasCanCountByte = true,
         )
-
         assertEquals(listOf("P0420"), codes.map { it.code })
     }
 
@@ -130,12 +136,31 @@ class ObdDecoderTest {
     @Test
     fun `decodes MIL and stored DTC count from PID 0101`() {
         val status = requireNotNull(ObdDecoder.decodeMonitorStatus("41 01 82 07 E1 00"))
-
         assertTrue(status.milOn)
         assertEquals(2, status.storedDtcCount)
 
         val clear = requireNotNull(ObdDecoder.decodeMonitorStatus("41 01 00 07 E1 00"))
         assertFalse(clear.milOn)
         assertEquals(0, clear.storedDtcCount)
+    }
+
+    @Test
+    fun `keeps monitor counts from multiple ECUs`() {
+        val statuses = ObdDecoder.decodeMonitorStatuses(
+            """
+                41 01 81 07 E1 00
+                41 01 02 07 E1 00
+            """.trimIndent(),
+        )
+
+        assertEquals(2, statuses.size)
+        assertEquals(3, statuses.sumOf { it.storedDtcCount })
+    }
+
+    @Test
+    fun `decodes counters since last clear`() {
+        assertEquals(7, ObdDecoder.decodeMode01Byte("41 30 07", 0x30))
+        assertEquals(300, ObdDecoder.decodeMode01Word("41 31 01 2C", 0x31))
+        assertEquals(90, ObdDecoder.decodeMode01Word("41 4E 00 5A", 0x4E))
     }
 }
