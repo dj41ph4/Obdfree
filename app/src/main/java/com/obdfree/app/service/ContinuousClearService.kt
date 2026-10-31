@@ -97,9 +97,6 @@ class ContinuousClearService : Service() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                // Never surface OBD/vehicle errors as notifications. Keep the technical
-                // foreground-service notification generic and silent; the last error is
-                // only stored for display inside OBDfree when the user opens the app.
                 prefs.edit()
                     .putString(ObdPrefs.CONTINUOUS_LAST_ERROR, friendlyError(error))
                     .apply()
@@ -161,7 +158,7 @@ class ContinuousClearService : Service() {
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Service OBDfree",
-            NotificationManager.IMPORTANCE_MIN,
+            NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "Maintient la connexion OBDfree active en arrière-plan."
             setSound(null, null)
