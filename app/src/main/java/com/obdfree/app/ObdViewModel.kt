@@ -148,10 +148,6 @@ class ObdViewModel(
             }
 
             try {
-                if (!transport.isConnected) {
-                    transport.connect(adapter.address)
-                }
-
                 _state.update {
                     it.copy(
                         connectionState = ConnectionState.INITIALIZING,
@@ -159,7 +155,12 @@ class ObdViewModel(
                     )
                 }
 
-                val info = client.initialize()
+                val info = ObdRuntime.exclusive {
+                    if (!transport.isConnected) {
+                        transport.connect(adapter.address)
+                    }
+                    client.initialize()
+                }
                 prefs.edit().putString(ObdPrefs.LAST_DEVICE, adapter.address).apply()
 
                 _state.update {
@@ -175,7 +176,9 @@ class ObdViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                runCatching { transport.disconnect() }
+                runCatching {
+                    ObdRuntime.exclusive { transport.disconnect() }
+                }
                 _state.update {
                     it.copy(
                         connectionState = ConnectionState.ERROR,
@@ -202,10 +205,13 @@ class ObdViewModel(
             }
 
             try {
-                val rawCodes = client.readTroubleCodes()
-                val clearHistory = runCatching { client.readClearHistory() }
-                    .getOrNull()
-                    ?.takeIf { it.hasData }
+                val (rawCodes, clearHistory) = ObdRuntime.exclusive {
+                    val codes = client.readTroubleCodes()
+                    val history = runCatching { client.readClearHistory() }
+                        .getOrNull()
+                        ?.takeIf { it.hasData }
+                    codes to history
+                }
                 val codes = knowledge.enrich(rawCodes)
 
                 _state.update {
@@ -240,14 +246,17 @@ class ObdViewModel(
             }
 
             try {
-                val cleared = client.clearTroubleCodes()
-                if (!cleared) error("Le véhicule n'a pas confirmé l'effacement")
+                val (residual, clearHistory) = ObdRuntime.exclusive {
+                    val cleared = client.clearTroubleCodes()
+                    if (!cleared) error("Le véhicule n'a pas confirmé l'effacement")
 
-                delay(300)
-                val residual = runCatching { client.readTroubleCodes() }.getOrDefault(emptyList())
-                val clearHistory = runCatching { client.readClearHistory() }
-                    .getOrNull()
-                    ?.takeIf { it.hasData }
+                    delay(300)
+                    val remaining = runCatching { client.readTroubleCodes() }.getOrDefault(emptyList())
+                    val history = runCatching { client.readClearHistory() }
+                        .getOrNull()
+                        ?.takeIf { it.hasData }
+                    remaining to history
+                }
                 val enriched = knowledge.enrich(residual)
 
                 _state.update {
