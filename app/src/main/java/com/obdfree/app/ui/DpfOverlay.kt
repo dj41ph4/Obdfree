@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -124,8 +123,9 @@ fun DpfOverlay(
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Column(Modifier.weight(1f)) {
+                        Column(modifier = Modifier.fillMaxWidth(0.78f)) {
                             Text(
                                 "Détection automatique",
                                 color = TextPrimary,
@@ -266,8 +266,11 @@ private fun DpfMetrics(snapshot: DpfSnapshot) {
 private fun Metric(label: String, value: String?) {
     if (value == null) return
 
-    Row(modifier = Modifier.fillMaxWidth()) {
-        Text(label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, color = TextSecondary, fontSize = 12.sp)
         Text(value, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
 }
