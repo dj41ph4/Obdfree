@@ -68,7 +68,9 @@ class ContinuousClearService : Service() {
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
 
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { transport.disconnect() }
+            runCatching {
+                ObdRuntime.exclusive { transport.disconnect() }
+            }
         }
 
         super.onDestroy()
@@ -79,16 +81,18 @@ class ContinuousClearService : Service() {
     private suspend fun clearLoop() {
         while (scope.isActive) {
             try {
-                val address = prefs.getString(ObdPrefs.LAST_DEVICE, null)
-                    ?: error("Aucun adaptateur OBD mémorisé")
+                ObdRuntime.exclusive {
+                    val address = prefs.getString(ObdPrefs.LAST_DEVICE, null)
+                        ?: error("Aucun adaptateur OBD mémorisé")
 
-                if (!transport.isConnected) {
-                    transport.connect(address)
-                    client.initialize()
+                    if (!transport.isConnected) {
+                        transport.connect(address)
+                        client.initialize()
+                    }
+
+                    val cleared = client.clearTroubleCodes()
+                    if (!cleared) error("Le véhicule n’a pas confirmé l’effacement")
                 }
-
-                val cleared = client.clearTroubleCodes()
-                if (!cleared) error("Le véhicule n’a pas confirmé l’effacement")
 
                 prefs.edit()
                     .putLong(ObdPrefs.CONTINUOUS_LAST_RUN, System.currentTimeMillis())
@@ -101,7 +105,9 @@ class ContinuousClearService : Service() {
                     .putString(ObdPrefs.CONTINUOUS_LAST_ERROR, friendlyError(error))
                     .apply()
 
-                runCatching { transport.disconnect() }
+                runCatching {
+                    ObdRuntime.exclusive { transport.disconnect() }
+                }
             }
 
             delay(INTERVAL_MS)
