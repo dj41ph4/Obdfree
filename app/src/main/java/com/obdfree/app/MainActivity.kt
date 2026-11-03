@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
                         continuousClearEnabled = state.continuousClearEnabled,
                         onAutoDetectionChanged = dpfViewModel::setAutoDetectionEnabled,
                         onRefresh = dpfViewModel::refreshNow,
+                        onProbeServiceControl = dpfViewModel::probeServiceControl,
                     )
                 }
             }
