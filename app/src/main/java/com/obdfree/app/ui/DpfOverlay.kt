@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.obdfree.app.model.AstraJEcuIdentity
 import com.obdfree.app.model.DpfSnapshot
 import com.obdfree.app.model.DpfUiState
 import com.obdfree.app.ui.theme.Danger
@@ -53,6 +54,7 @@ fun DpfOverlay(
     continuousClearEnabled: Boolean,
     onAutoDetectionChanged: (Boolean) -> Unit,
     onRefresh: () -> Unit,
+    onProbeServiceControl: () -> Unit,
 ) {
     var showDialog by remember { mutableStateOf(false) }
     val snapshot = state.snapshot
@@ -89,7 +91,9 @@ fun DpfOverlay(
             Spacer(Modifier.width(7.dp))
             Text(
                 text = when {
-                    regen -> "REGEN ${snapshot.regenerationProgressPercent?.roundToInt() ?: 0}%"
+                    regen && snapshot?.regenerationProgressPercent != null ->
+                        "REGEN ${snapshot.regenerationProgressPercent.roundToInt()}%"
+                    regen -> "REGEN"
                     snapshot?.sootPercent != null -> "${snapshot.sootPercent.roundToInt()}%"
                     state.autoDetectionEnabled -> "AUTO"
                     else -> ""
@@ -116,7 +120,7 @@ fun DpfOverlay(
             text = {
                 Column(
                     modifier = Modifier
-                        .heightIn(max = 530.dp)
+                        .heightIn(max = 560.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -126,16 +130,8 @@ fun DpfOverlay(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column(modifier = Modifier.fillMaxWidth(0.78f)) {
-                            Text(
-                                "Détection automatique",
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                "Surveille la régénération toutes les 2 s",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                            )
+                            Text("Détection automatique", color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Text("Surveille la régénération toutes les 2 s", color = TextSecondary, fontSize = 11.sp)
                         }
                         Switch(
                             checked = state.autoDetectionEnabled,
@@ -145,23 +141,17 @@ fun DpfOverlay(
                     }
 
                     if (continuousClearEnabled) {
-                        InfoLine(
-                            "Détection FAP suspendue pendant l’effacement continu.",
-                            Danger,
-                        )
+                        InfoLine("Détection FAP suspendue pendant l’effacement continu.", Danger)
                     }
-
-                    if (state.busy) {
-                        InfoLine("Lecture FAP en cours…", Electric)
-                    }
-
+                    if (state.busy) InfoLine("Identification ECU / lecture FAP en cours…", Electric)
                     state.errorMessage?.let { InfoLine(it, Danger) }
 
+                    snapshot?.ecuIdentity?.let { EcuIdentityCard(it) }
                     snapshot?.let { DpfMetrics(it) }
 
                     if (snapshot == null && state.errorMessage == null) {
                         Text(
-                            "Appuie sur Actualiser pour détecter automatiquement les PIDs FAP compatibles avec ton calculateur.",
+                            "Appuie sur Actualiser : OBDfree interroge directement l’ECU (GMLAN 1A), identifie Denso DECe01 / GM E87 puis charge le profil FAP correspondant.",
                             color = TextSecondary,
                             fontSize = 12.sp,
                         )
@@ -173,38 +163,16 @@ fun DpfOverlay(
                         modifier = Modifier.fillMaxWidth(),
                         border = BorderStroke(1.dp, Electric.copy(alpha = 0.45f)),
                     ) {
-                        Text("Actualiser les données FAP", color = Electric, fontWeight = FontWeight.Bold)
+                        Text("Identifier ECU + actualiser FAP", color = Electric, fontWeight = FontWeight.Bold)
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.White.copy(alpha = 0.035f), RoundedCornerShape(15.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            "Régénération service",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Black,
-                        )
-                        Text(
-                            state.serviceRegenerationReason,
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                        )
-                        Button(
-                            onClick = {},
-                            enabled = state.serviceRegenerationAvailable,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Danger,
-                                contentColor = DeepInk,
-                            ),
-                        ) {
-                            Text("Forcer une régénération", fontWeight = FontWeight.Black)
-                        }
-                    }
+                    ServiceRegenerationCard(
+                        state = state,
+                        continuousClearEnabled = continuousClearEnabled,
+                        onProbeServiceControl = onProbeServiceControl,
+                    )
+
+                    IdleAdjustmentCard(state)
                 }
             },
             confirmButton = {
@@ -217,13 +185,107 @@ fun DpfOverlay(
 }
 
 @Composable
+private fun EcuIdentityCard(identity: AstraJEcuIdentity) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Electric.copy(alpha = 0.07f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("Calculateur moteur", color = Electric, fontWeight = FontWeight.Black, fontSize = 12.sp)
+        Metric("Famille", identity.displayName)
+        identity.engineCode?.let { Metric("Moteur / système", it) }
+        identity.systemIdentification?.let { Metric("Identification", it) }
+        identity.supplierIdentification?.let { Metric("Fournisseur", it) }
+        identity.programmingDate?.let { Metric("Programmation", it) }
+        identity.vin?.takeIf { it.length >= 6 }?.let { Metric("VIN", "…${it.takeLast(6)}") }
+        if (identity.confidence > 0) Metric("Confiance", "${identity.confidence}%")
+    }
+}
+
+@Composable
+private fun ServiceRegenerationCard(
+    state: DpfUiState,
+    continuousClearEnabled: Boolean,
+    onProbeServiceControl: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.035f), RoundedCornerShape(15.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Régénération service", color = TextPrimary, fontWeight = FontWeight.Black)
+        Text(state.serviceRegenerationReason, color = TextSecondary, fontSize = 11.sp)
+
+        OutlinedButton(
+            onClick = onProbeServiceControl,
+            enabled = !state.serviceProbeBusy && !continuousClearEnabled && state.snapshot != null,
+            modifier = Modifier.fillMaxWidth(),
+            border = BorderStroke(1.dp, Electric.copy(alpha = 0.45f)),
+        ) {
+            Text(
+                if (state.serviceProbeBusy) "Test GMLAN AE…" else "Tester le contrôle service GMLAN",
+                color = Electric,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+
+        state.serviceProbeResult?.let { InfoLine(it, Electric) }
+
+        Button(
+            onClick = {},
+            enabled = state.serviceRegenerationAvailable,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = Danger, contentColor = DeepInk),
+        ) {
+            Text("Forcer une régénération", fontWeight = FontWeight.Black)
+        }
+
+        if (!state.serviceRegenerationAvailable) {
+            Text(
+                "Le service AE est testable sans actionner le moteur. Le CPID exact de régénération reste verrouillé tant qu’il n’est pas identifié : un CPID inventé pourrait commander un autre actionneur.",
+                color = TextSecondary,
+                fontSize = 10.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun IdleAdjustmentCard(state: DpfUiState) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.035f), RoundedCornerShape(15.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Text("Réglage ralenti", color = TextPrimary, fontWeight = FontWeight.Black)
+        Text(state.idleAdjustmentReason, color = TextSecondary, fontSize = 11.sp)
+        InfoLine(
+            if (state.idleAdjustmentRecognized) {
+                "Fonction reconnue sur ce profil ECU • écriture encore verrouillée"
+            } else {
+                "Fonction non activée tant que l’ECU n’est pas identifié"
+            },
+            if (state.idleAdjustmentRecognized) Mint else TextSecondary,
+        )
+    }
+}
+
+@Composable
 private fun DpfMetrics(snapshot: DpfSnapshot) {
     val regen = snapshot.regenerationActive == true
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         InfoLine(
             text = when {
-                regen -> "Régénération active • ${snapshot.regenerationProgressPercent?.roundToInt() ?: 0}%"
+                regen && snapshot.regenerationProgressPercent != null ->
+                    "Régénération active • ${snapshot.regenerationProgressPercent.roundToInt()}%"
+                regen -> "Régénération active"
                 snapshot.regenerationActive == false -> "Régénération inactive"
                 else -> "État de régénération inconnu"
             },
@@ -247,6 +309,10 @@ private fun DpfMetrics(snapshot: DpfSnapshot) {
         Metric("Liquide refroidissement", snapshot.coolantTemperatureC?.let { "$it °C" })
         Metric("Huile moteur", snapshot.oilTemperatureC?.let { "$it °C" })
         Metric("Régime moteur", snapshot.engineRpm?.let { "$it tr/min" })
+
+        snapshot.regenerationInterlockRaw?.let { Metric("Verrous régénération 326D", it) }
+        snapshot.deviceControlStatusRaw?.let { Metric("État contrôle 32EB", it) }
+        snapshot.deviceControlRejectRaw?.let { Metric("Refus contrôle 32EC", it) }
 
         val naturalReady = snapshot.sootPercent?.let { it >= 80f } == true &&
             snapshot.coolantTemperatureC?.let { it >= 70 } == true &&
