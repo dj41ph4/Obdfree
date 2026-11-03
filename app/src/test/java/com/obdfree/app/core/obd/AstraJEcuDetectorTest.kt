@@ -23,9 +23,9 @@ class AstraJEcuDetectorTest {
     @Test
     fun `reassembles ELM segmented GMLAN identification response`() {
         val response = """
-            014
+            013
             0: 5A 90 57 30 4C 50
-            1: 30 30 30 30 30 30 30
+            1: 30 30 30 30 30 30
             2: 30 30 30 30 30 30 31
         """.trimIndent()
 
