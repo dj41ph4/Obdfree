@@ -92,36 +92,57 @@ class AstraJDpfMonitor(
     }
 
     /**
-     * Non-destructive GMLAN capability probe. AE 00 releases every device that might be under
-     * tester control; it does not request a new actuator state. 20 returns the module to normal
-     * mode afterwards. This tells us whether the ECU exposes GMLAN DeviceControl without guessing
-     * a DPF CPID.
+     * Non-destructive GMLAN capability probe.
+     *
+     * GMW3110 defines 10 03 as InitiateDiagnosticOperation / enable DTC algorithms while
+     * DeviceControl is active. AE 00 releases all devices rather than commanding a new state,
+     * so the sequence can test the service path without guessing the DPF CPID. 20 always puts
+     * the module back in normal mode afterwards.
      */
     suspend fun probeDeviceControl(): DeviceControlProbe = withAstraJHeader {
-        val response = runCatching { client.command("AE00", 6_000) }
-            .getOrElse { error ->
-                return@withAstraJHeader DeviceControlProbe(
-                    supported = false,
-                    message = error.message ?: "Aucune réponse au service GMLAN AE.",
-                    rawResponse = "",
-                )
-            }
+        val cleanupBefore = runCatching { client.command("20", 4_000) }.getOrNull()
+        val diagnosticMode = runCatching { client.command("1003", 6_000) }.getOrNull()
+        val aeResponse = runCatching { client.command("AE00", 6_000) }.getOrNull()
+        val cleanupAfter = runCatching { client.command("20", 4_000) }.getOrNull()
 
-        val compact = response.uppercase().filter { it in '0'..'9' || it in 'A'..'F' }
-        val nrc = ObdDecoder.negativeResponseCode(response, 0xAE)
-        val supported = "EE00" in compact || (nrc != 0x11 && nrc != 0x12)
+        val modeCompact = compactHex(diagnosticMode)
+        val aeCompact = compactHex(aeResponse)
+        val modeNrc = diagnosticMode?.let { ObdDecoder.negativeResponseCode(it, 0x10) }
+        val aeNrc = aeResponse?.let { ObdDecoder.negativeResponseCode(it, 0xAE) }
 
-        runCatching { client.command("20", 4_000) }
-        runCatching { client.command("AE00", 4_000) }
+        val diagnosticModeAccepted = "5003" in modeCompact ||
+            (modeNrc != null && modeNrc !in setOf(0x11, 0x12))
+        val aePositive = "EE00" in aeCompact
+        val aeRecognized = aeNrc != null && aeNrc !in setOf(0x11, 0x12)
+        val aeNoData = aeResponse.isNullOrBlank() || aeResponse.contains("NO DATA", ignoreCase = true)
+        val supported = aePositive || aeRecognized
+
+        val message = when {
+            aePositive -> "GMLAN DeviceControl confirmé: 10 03 puis AE 00 acceptés par l’ECU."
+            aeRecognized ->
+                "Le service AE est reconnu par l’ECU mais refusé avec NRC ${hexByte(aeNrc)}. " +
+                    if (diagnosticModeAccepted) "Le mode diagnostic 10 03 est accepté." else "Le mode 10 03 reste à confirmer."
+            aeNoData && diagnosticModeAccepted ->
+                "Le mode GMLAN 10 03 est accepté, mais AE 00 ne renvoie rien. " +
+                    "Le DeviceControl peut demander une condition/session supplémentaire sur cet E87."
+            aeNoData ->
+                "Aucune réponse à AE 00 et 10 03 non confirmé. Test GMLAN non concluant."
+            modeNrc != null ->
+                "10 03 refusé avec NRC ${hexByte(modeNrc)}; AE non confirmé."
+            else -> "Réponses GMLAN reçues mais aucun acquittement DeviceControl exploitable."
+        }
+
+        val raw = buildList {
+            cleanupBefore?.let { add("20(pre)=${singleLine(it)}") }
+            diagnosticMode?.let { add("1003=${singleLine(it)}") }
+            aeResponse?.let { add("AE00=${singleLine(it)}") }
+            cleanupAfter?.let { add("20(post)=${singleLine(it)}") }
+        }.joinToString(" | ").take(360)
 
         DeviceControlProbe(
             supported = supported,
-            message = when {
-                "EE00" in compact -> "GMLAN DeviceControl AE confirmé par l’ECU (réponse EE00)."
-                nrc != null -> "L’ECU répond au service AE avec NRC ${nrc.toString(16).uppercase().padStart(2, '0')}."
-                else -> "Réponse AE reçue; compatibilité partielle à confirmer."
-            },
-            rawResponse = response.replace('\n', ' ').take(180),
+            message = message,
+            rawResponse = raw,
         )
     }
 
@@ -177,33 +198,54 @@ class AstraJDpfMonitor(
         val regenState = readRegenState20F2()
         val regenRequest = readDid("2220FA", 0x20FA, 1)?.firstOrNull()
         val legacyProgress = readDid("223274", 0x3274, 1)?.firstOrNull()
-        val sootPrimary = readDid("22336A", 0x336A, 1)?.firstOrNull()
-        val sootFallback = readDid("223275", 0x3275, 1)?.firstOrNull()
-        val temp = readDid("2220F8", 0x20F8, 2)
-        val tempFallback = readDid("223279", 0x3279, 1)?.firstOrNull()
-        val pressureKpa = readDid("2220F4", 0x20F4, 1)?.firstOrNull()
-        val distance16 = readDid("223039", 0x3039, 2)
-        val distance24 = readDid("223277", 0x3277, 3)
+
+        // For Astra J 1.7 CDTI, prefer the Astra-J-specific 32xx/30xx identifiers.
+        // The broader E87 identifiers stay as fallbacks because E87 calibrations differ.
+        val sootAstraJ = readDid("223275", 0x3275, 1)?.firstOrNull()
+        val sootE87Fallback = readDid("22336A", 0x336A, 1)?.firstOrNull()
+
+        val tempAstraJ = readDid("223279", 0x3279, 1)?.firstOrNull()
+        val tempE87Fallback = readDid("2220F8", 0x20F8, 2)
+
+        val pressureAstraJ = readDid("223035", 0x3035, 1)?.firstOrNull()
+        val pressureE87Fallback = readDid("2220F4", 0x20F4, 1)?.firstOrNull()
+
+        val distanceAstraJ = readDid("223277", 0x3277, 3)
+        val distanceE87Fallback = readDid("223039", 0x3039, 2)
 
         val active = regenState?.let(::isActiveRegenState)
             ?: regenRequest?.let { it and 0x01 != 0 }
             ?: legacyProgress?.let { it > 0 }
 
+        val astraDistance = AstraJDpfDecoder.unsigned24(distanceAstraJ.orEmpty())
+        val fallbackDistance = AstraJDpfDecoder.unsigned16(distanceE87Fallback.orEmpty())
+            ?.takeIf { it > 0 }
+
         return ProfileValues(
-            profile = "GM E87",
-            supported = listOf(regenState, regenRequest, sootPrimary, sootFallback, temp, pressureKpa, distance16).any { it != null },
-            sootPercent = sootPrimary?.let(AstraJDpfDecoder::directOrScaledPercent)
-                ?: sootFallback?.let(AstraJDpfDecoder::directOrScaledPercent),
+            profile = "GM E87 • Astra J 1.7",
+            supported = listOf(
+                regenState,
+                regenRequest,
+                sootAstraJ,
+                sootE87Fallback,
+                tempAstraJ,
+                tempE87Fallback,
+                pressureAstraJ,
+                pressureE87Fallback,
+                distanceAstraJ,
+            ).any { it != null },
+            sootPercent = sootAstraJ?.let(AstraJDpfDecoder::directOrScaledPercent)
+                ?: sootE87Fallback?.let(AstraJDpfDecoder::directOrScaledPercent),
             regenerationActive = active,
             regenerationProgressPercent = legacyProgress?.let(AstraJDpfDecoder::regenerationProgress),
-            exhaustTemperatureC = temp?.let(AstraJDpfDecoder::temperatureTenthDegreeWord)
-                ?: tempFallback?.let(AstraJDpfDecoder::temperatureFiveDegreeByte),
-            // DID 20F4 is a signed kPa value; the UI displays mbar.
-            differentialPressureMbar = pressureKpa
-                ?.let(AstraJDpfDecoder::signedByte)
-                ?.let { abs(it) * 10f },
-            distanceSinceRegenerationKm = AstraJDpfDecoder.unsigned16(distance16.orEmpty())
-                ?: AstraJDpfDecoder.unsigned24(distance24.orEmpty()),
+            exhaustTemperatureC = tempAstraJ?.let(AstraJDpfDecoder::temperatureFiveDegreeByte)
+                ?: tempE87Fallback?.let(AstraJDpfDecoder::temperatureTenthDegreeWord),
+            differentialPressureMbar = pressureAstraJ
+                ?.let { (it - 20).coerceAtLeast(0).toFloat() }
+                ?: pressureE87Fallback
+                    ?.let(AstraJDpfDecoder::signedByte)
+                    ?.let { abs(it) * 10f },
+            distanceSinceRegenerationKm = astraDistance ?: fallbackDistance,
         )
     }
 
@@ -298,4 +340,20 @@ class AstraJDpfMonitor(
             minimumBytes = minimumBytes,
         )
     }
+
+    private fun compactHex(value: String?): String = value.orEmpty()
+        .uppercase()
+        .filter { it in '0'..'9' || it in 'A'..'F' }
+
+    private fun singleLine(value: String): String = value
+        .replace('\n', ' ')
+        .replace('\r', ' ')
+        .trim()
+        .take(90)
+
+    private fun hexByte(value: Int?): String = value
+        ?.toString(16)
+        ?.uppercase()
+        ?.padStart(2, '0')
+        ?: "??"
 }
