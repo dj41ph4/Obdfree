@@ -63,4 +63,18 @@ class AstraJEcuDetectorTest {
         assertEquals(AstraJEcuFamily.GM_E87, identity.family)
         assertTrue(identity.confidence >= 85)
     }
+
+    @Test
+    fun `A17DTS reported by ECU is exact E87 profile`() {
+        val identity = detector.classify(
+            vin = "W0LPE6EJ0D8060800",
+            systemId = null,
+            engineCode = "A17DTS",
+            programmingDate = "2013-01-21",
+            supplier = "AB",
+        )
+
+        assertEquals(AstraJEcuFamily.GM_E87, identity.family)
+        assertEquals(100, identity.confidence)
+    }
 }
