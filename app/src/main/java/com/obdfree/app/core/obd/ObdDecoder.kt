@@ -50,12 +50,7 @@ object ObdDecoder {
         expectedCount: Int? = null,
         hasCanCountByte: Boolean? = null,
     ): List<TroubleCode> {
-        val payloads = buildList {
-            addAll(extractElmFormattedPayloads(response, positiveResponse))
-            addAll(extractIsoTpPayloads(response, positiveResponse))
-            addAll(extractSimplePayloads(response, positiveResponse))
-        }
-
+        val payloads = extractPayloads(response, positiveResponse)
         val codes = LinkedHashMap<String, TroubleCode>()
 
         payloads.forEach { fullPayload ->
@@ -91,6 +86,56 @@ object ObdDecoder {
         return codes.values.toList()
     }
 
+    fun containsPositiveDtcResponse(response: String, positiveResponse: Int): Boolean =
+        extractPayloads(response, positiveResponse).isNotEmpty()
+
+    fun isExplicitNoDtcResponse(
+        response: String,
+        positiveResponse: Int,
+        hasCanCountByte: Boolean?,
+    ): Boolean {
+        val normalizedText = response.uppercase().filterNot(Char::isWhitespace)
+        if ("NODATA" in normalizedText) return true
+
+        val payloads = extractPayloads(response, positiveResponse)
+            .mapNotNull { fullPayload ->
+                val modeIndex = fullPayload.indexOf(positiveResponse)
+                if (modeIndex < 0) null else fullPayload.drop(modeIndex + 1)
+            }
+
+        if (payloads.isEmpty()) return false
+
+        return payloads.all { payload ->
+            when (hasCanCountByte) {
+                true -> payload.firstOrNull() == 0
+                false -> payload
+                    .chunked(2)
+                    .filter { it.size == 2 }
+                    .all { pair -> pair[0] == 0 && pair[1] == 0 }
+                null -> payload.firstOrNull() == 0 || payload
+                    .chunked(2)
+                    .filter { it.size == 2 }
+                    .all { pair -> pair[0] == 0 && pair[1] == 0 }
+            }
+        }
+    }
+
+    fun negativeResponseCode(response: String, requestedService: Int): Int? {
+        val marker = "7F" + requestedService.toString(16).padStart(2, '0').uppercase()
+
+        response.lineSequence().forEach { rawLine ->
+            val compact = hexOnly(rawLine)
+            val index = compact.indexOf(marker)
+            if (index < 0) return@forEach
+            val codeStart = index + marker.length
+            if (compact.length >= codeStart + 2) {
+                return compact.substring(codeStart, codeStart + 2).toIntOrNull(16)
+            }
+        }
+
+        return null
+    }
+
     fun decodeLiveData(
         rpmResponse: String,
         speedResponse: String,
@@ -102,6 +147,12 @@ object ObdDecoder {
         coolantCelsius = pidBytes(coolantResponse, 0x05, 1)?.firstOrNull()?.minus(40),
         throttlePercent = pidBytes(throttleResponse, 0x11, 1)?.firstOrNull()?.let { it * 100f / 255f },
     )
+
+    private fun extractPayloads(response: String, positiveResponse: Int): List<List<Int>> = buildList {
+        addAll(extractElmFormattedPayloads(response, positiveResponse))
+        addAll(extractIsoTpPayloads(response, positiveResponse))
+        addAll(extractSimplePayloads(response, positiveResponse))
+    }
 
     private fun extractElmFormattedPayloads(
         response: String,

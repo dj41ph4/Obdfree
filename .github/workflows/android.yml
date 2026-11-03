@@ -50,30 +50,105 @@ jobs:
         run: |
           set -euo pipefail
           if grep -R -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\.(startDiscovery|cancelDiscovery)\(' app/src/main/java; then
-            echo "Bluetooth discovery API found in paired-device-only flow. This would require BLUETOOTH_SCAN on Android 12+."
+            echo "Bluetooth discovery API found in paired-device-only flow."
             exit 1
           fi
 
-      - name: Lint, unit tests and build debug APK
-        run: gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug --stacktrace
+      - name: Lint and unit tests
+        run: gradle :app:lintDebug :app:testDebugUnitTest --stacktrace
 
-      - name: Upload APK artifact
+      - name: Build debug APK for pull requests
+        if: github.event_name == 'pull_request'
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload debug APK artifact
+        if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: OBDfree-${{ steps.version.outputs.version }}-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      - name: Tag and publish release
+      - name: Reconstruct permanent release signing identity
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          OBDFREE_SIGNING_SEED: ${{ secrets.OBDFREE_SIGNING_SEED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${OBDFREE_SIGNING_SEED:-}" ]; then
+            echo "Missing repository secret OBDFREE_SIGNING_SEED"
+            exit 1
+          fi
+
+          python3 -m pip install --disable-pip-version-check --quiet cryptography
+          export OBDFREE_SIGNING_OUT="$GITHUB_WORKSPACE/.github/signing/generated"
+          mkdir -p "$OBDFREE_SIGNING_OUT"
+          python3 .github/signing/generate_release_identity.py > "$OBDFREE_SIGNING_OUT/fingerprint.txt"
+
+          openssl pkcs12 -export \
+            -name obdfree-release \
+            -inkey "$OBDFREE_SIGNING_OUT/release-key.pem" \
+            -in "$OBDFREE_SIGNING_OUT/release-cert.pem" \
+            -out "$OBDFREE_SIGNING_OUT/obdfree-release.p12" \
+            -passout "pass:$OBDFREE_SIGNING_SEED"
+
+          keytool -importkeystore -noprompt \
+            -srckeystore "$OBDFREE_SIGNING_OUT/obdfree-release.p12" \
+            -srcstoretype PKCS12 \
+            -srcstorepass "$OBDFREE_SIGNING_SEED" \
+            -srcalias obdfree-release \
+            -destkeystore "$OBDFREE_SIGNING_OUT/obdfree-release.jks" \
+            -deststoretype JKS \
+            -deststorepass "$OBDFREE_SIGNING_SEED" \
+            -destkeypass "$OBDFREE_SIGNING_SEED" \
+            -destalias obdfree-release
+
+          rm -f "$OBDFREE_SIGNING_OUT/release-key.pem" "$OBDFREE_SIGNING_OUT/obdfree-release.p12"
+          echo "OBDFREE_KEYSTORE_PATH=$OBDFREE_SIGNING_OUT/obdfree-release.jks" >> "$GITHUB_ENV"
+          echo "OBDFREE_KEYSTORE_PASSWORD=$OBDFREE_SIGNING_SEED" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Verify package and permanent release signature
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/apksigner.txt
+          EXPECTED="$(tr -d '\r\n' < .github/signing/generated/fingerprint.txt | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/apksigner.txt | head -n1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test -n "$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "Release certificate mismatch"
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -q "package: name='com.obdfree.app'"
+
+      - name: Upload signed APK artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OBDfree-${{ steps.version.outputs.version }}-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Tag and publish signed release
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
           APK="OBDfree-${VERSION}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -82,7 +157,7 @@ jobs:
           if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
             TAG_COMMIT="$(git rev-list -n 1 "$TAG")"
             if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
-              echo "Refusing to overwrite ${TAG}: it already points to ${TAG_COMMIT}, not ${GITHUB_SHA}."
+              echo "Refusing to overwrite ${TAG}: it points to ${TAG_COMMIT}."
               exit 1
             fi
           else
@@ -90,10 +165,21 @@ jobs:
             git push origin "$TAG"
           fi
 
-          NOTES="OBDfree ${VERSION}: connexion ELM327 renforcée (fallback protocoles et RFCOMM), récupération BUFFER FULL/RX ERROR/DATA ERROR, décodage CAN/ISO-TP/CAF1 multi-trames, états DTC mémorisé/en attente/permanent, contexte depuis le dernier effacement (PID 30/31/4E), descriptions françaises sans inventer les codes constructeur, et mode d'effacement continu toutes les 30 secondes en arrière-plan avec reconnexion automatique."
+          NOTES=$(cat <<EOF
+          OBDfree ${VERSION}
+
+          - Première release signée avec l'identité retail permanente OBDfree.
+          - Mise à jour automatique depuis GitHub Releases.
+          - Vérification SHA-256, package Android et certificat de signature avant installation.
+          - Les futures APK doivent conserver exactement cette identité de signature.
+
+          SHA-256 APK: ${SHA256}
+          EOF
+          )
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --title "OBDfree ${VERSION}" --notes "$NOTES"
           else
             gh release create "$TAG" "$APK" --title "OBDfree ${VERSION}" --notes "$NOTES"
           fi

@@ -19,6 +19,11 @@ data class ElmInitialization(
 class Elm327Client(
     private val transport: ObdTransport,
 ) {
+    private data class DtcReadAttempt(
+        val label: String,
+        val response: String,
+    )
+
     private var protocolNumber: String? = null
     private var protocolDescription: String? = null
     private var adapterVoltage: Float? = null
@@ -50,58 +55,69 @@ class Elm327Client(
             ?.let(ObdDecoder::decodeMonitorStatuses)
             .orEmpty()
 
-        // PID 01 can be answered by more than one ECU. A strict count comparison is only
-        // valid when a single ECU supplied the count; otherwise duplicated DTCs across ECUs
-        // can make a de-duplicated list look falsely incomplete.
+        // PID 01 may be answered by several ECUs. Only a single responder gives us a
+        // trustworthy exact count, but any non-zero responder is still a strong signal that
+        // Mode 03 must not be accepted as empty without a second representation attempt.
         val expectedStoredCount = monitorStatuses.singleOrNull()?.storedDtcCount
+        val anyStoredAnnounced = monitorStatuses.any { it.storedDtcCount > 0 }
         val canCountByte = detectCanCountByte()
 
-        var stored = readDtcMode(
-            command = "03",
+        val stored = readDtcMode(
+            commandValue = "03",
             responseMode = 0x43,
             expectedCount = expectedStoredCount,
             hasCanCountByte = canCountByte,
             status = DtcStatus.STORED,
+            verifyExplicitEmpty = anyStoredAnnounced || expectedStoredCount == null,
+            optionalService = false,
         )
-
-        if (expectedStoredCount != null && expectedStoredCount > 0 && stored.size < expectedStoredCount) {
-            val headerResponse = readWithHeaders("03")
-            stored = ObdDecoder.decodeTroubleCodes(
-                response = headerResponse,
-                positiveResponse = 0x43,
-                expectedCount = expectedStoredCount,
-                hasCanCountByte = canCountByte,
-            ).map { it.copy(statuses = setOf(DtcStatus.STORED)) }
-        }
 
         if (expectedStoredCount != null && expectedStoredCount > 0 && stored.size < expectedStoredCount) {
             error(
                 "Le calculateur annonce $expectedStoredCount défaut(s), " +
-                    "mais la réponse de l’ELM327 n’a pas pu être décodée correctement.",
+                    "mais seulement ${stored.size} ont pu être décodé(s).",
             )
         }
 
-        val pending = runCatching {
+        val pendingResult = runCatching {
             readDtcMode(
-                command = "07",
+                commandValue = "07",
                 responseMode = 0x47,
                 expectedCount = null,
                 hasCanCountByte = canCountByte,
                 status = DtcStatus.PENDING,
+                verifyExplicitEmpty = false,
+                optionalService = true,
             )
-        }.getOrDefault(emptyList())
+        }
 
-        val permanent = runCatching {
+        val permanentResult = runCatching {
             readDtcMode(
-                command = "0A",
+                commandValue = "0A",
                 responseMode = 0x4A,
                 expectedCount = null,
                 hasCanCountByte = canCountByte,
                 status = DtcStatus.PERMANENT,
+                verifyExplicitEmpty = false,
+                optionalService = true,
             )
-        }.getOrDefault(emptyList())
+        }
 
-        return mergeStatuses(stored + pending + permanent)
+        val result = mergeStatuses(
+            stored +
+                pendingResult.getOrDefault(emptyList()) +
+                permanentResult.getOrDefault(emptyList()),
+        )
+
+        // Do not silently turn an unknown Mode 07/0A reply into "no faults" when there was
+        // nothing readable in Mode 03 either. Unsupported services are handled as valid empty
+        // replies inside readDtcMode; only genuinely undecodable failures reach this point.
+        if (result.isEmpty()) {
+            pendingResult.exceptionOrNull()?.let { throw it }
+            permanentResult.exceptionOrNull()?.let { throw it }
+        }
+
+        return result
     }
 
     suspend fun readClearHistory(): ClearHistory {
@@ -301,35 +317,127 @@ class Elm327Client(
     }
 
     private suspend fun readDtcMode(
-        command: String,
+        commandValue: String,
         responseMode: Int,
         expectedCount: Int?,
         hasCanCountByte: Boolean?,
         status: DtcStatus,
+        verifyExplicitEmpty: Boolean,
+        optionalService: Boolean,
     ): List<TroubleCode> {
-        val response = retryCommand(command, attempts = 2, timeoutMs = 12_000)
-        if (response.contains("NO DATA", ignoreCase = true)) return emptyList()
-        throwIfAdapterError(response)
+        val requestedService = commandValue.toInt(16)
+        val attempts = mutableListOf<DtcReadAttempt>()
 
-        return ObdDecoder.decodeTroubleCodes(
-            response = response,
-            positiveResponse = responseMode,
-            expectedCount = expectedCount,
-            hasCanCountByte = hasCanCountByte,
-        ).map { it.copy(statuses = setOf(status)) }
+        suspend fun inspect(label: String, response: String): List<TroubleCode>? {
+            attempts += DtcReadAttempt(label, response)
+            throwIfAdapterError(response)
+
+            val nrc = ObdDecoder.negativeResponseCode(response, requestedService)
+            if (nrc != null) {
+                if (optionalService && nrc in UNSUPPORTED_SERVICE_NRCS) return emptyList()
+                if (nrc != NRC_RESPONSE_PENDING) {
+                    error("Le calculateur refuse le mode $commandValue (NRC ${nrc.toString(16).uppercase().padStart(2, '0')}).")
+                }
+                return null
+            }
+
+            val explicitEmpty = ObdDecoder.isExplicitNoDtcResponse(
+                response = response,
+                positiveResponse = responseMode,
+                hasCanCountByte = hasCanCountByte,
+            )
+
+            if (expectedCount == 0 && explicitEmpty) return emptyList()
+
+            val decoded = decodeDtcResponse(
+                response = response,
+                responseMode = responseMode,
+                expectedCount = expectedCount,
+                hasCanCountByte = hasCanCountByte,
+            )
+            if (decoded.isNotEmpty()) {
+                return decoded.map { it.copy(statuses = setOf(status)) }
+            }
+
+            if (explicitEmpty && !verifyExplicitEmpty) return emptyList()
+            return null
+        }
+
+        val normalResponse = retryCommand(commandValue, attempts = 2, timeoutMs = 12_000)
+        inspect("normal", normalResponse)?.let { return it }
+
+        val headerResponse = runCatching { readWithHeaders(commandValue) }.getOrNull()
+        if (headerResponse != null) {
+            inspect("headers", headerResponse)?.let { return it }
+        }
+
+        if (hasCanCountByte != false) {
+            val rawCanResponse = runCatching { readWithRawCan(commandValue) }.getOrNull()
+            if (rawCanResponse != null) {
+                inspect("can-brut", rawCanResponse)?.let { return it }
+            }
+        }
+
+        val allExplicitlyEmpty = attempts.isNotEmpty() && attempts.all { attempt ->
+            ObdDecoder.isExplicitNoDtcResponse(
+                response = attempt.response,
+                positiveResponse = responseMode,
+                hasCanCountByte = hasCanCountByte,
+            )
+        }
+
+        if (allExplicitlyEmpty && expectedCount != null && expectedCount == 0) {
+            return emptyList()
+        }
+        if (allExplicitlyEmpty && !verifyExplicitEmpty) {
+            return emptyList()
+        }
+
+        val protocolText = protocolDescription ?: protocolNumber ?: "inconnu"
+        val trace = attempts.joinToString(" • ") { attempt ->
+            "${attempt.label}=${diagnosticSnippet(attempt.response)}"
+        }
+        error("Réponse DTC ELM non décodable (mode $commandValue, protocole $protocolText). $trace")
+    }
+
+    private fun decodeDtcResponse(
+        response: String,
+        responseMode: Int,
+        expectedCount: Int?,
+        hasCanCountByte: Boolean?,
+    ): List<TroubleCode> {
+        val hints = mutableListOf<Boolean?>()
+        hints += hasCanCountByte
+        hints += null
+        if (hasCanCountByte != null) hints += !hasCanCountByte
+
+        val candidates = hints.distinct().map { hint ->
+            ObdDecoder.decodeTroubleCodes(
+                response = response,
+                positiveResponse = responseMode,
+                expectedCount = expectedCount,
+                hasCanCountByte = hint,
+            )
+        }
+
+        if (expectedCount != null && expectedCount > 0) {
+            candidates.firstOrNull { it.size == expectedCount }?.let { return it }
+        }
+
+        return candidates.firstOrNull { it.isNotEmpty() }.orEmpty()
     }
 
     private suspend fun readMode01Byte(command: String, pid: Int): Int? {
         val response = runCatching { retryCommand(command, attempts = 2, timeoutMs = 7_000) }
             .getOrNull() ?: return null
-        if (response.contains("NO DATA", ignoreCase = true)) return null
+        if (isNoData(response)) return null
         return ObdDecoder.decodeMode01Byte(response, pid)
     }
 
     private suspend fun readMode01Word(command: String, pid: Int): Int? {
         val response = runCatching { retryCommand(command, attempts = 2, timeoutMs = 7_000) }
             .getOrNull() ?: return null
-        if (response.contains("NO DATA", ignoreCase = true)) return null
+        if (isNoData(response)) return null
         return ObdDecoder.decodeMode01Word(response, pid)
     }
 
@@ -337,8 +445,23 @@ class Elm327Client(
         return try {
             bestEffortAt("ATS1")
             bestEffortAt("ATH1")
+            bestEffortAt("ATCAF1")
             retryCommand(value, attempts = 2, timeoutMs = 12_000)
         } finally {
+            bestEffortAt("ATH0")
+            bestEffortAt("ATS0")
+        }
+    }
+
+    private suspend fun readWithRawCan(value: String): String {
+        return try {
+            bestEffortAt("ATS1")
+            bestEffortAt("ATH1")
+            bestEffortAt("ATCFC1")
+            bestEffortAt("ATCAF0")
+            retryCommand(value, attempts = 2, timeoutMs = 12_000)
+        } finally {
+            bestEffortAt("ATCAF1")
             bestEffortAt("ATH0")
             bestEffortAt("ATS0")
         }
@@ -450,6 +573,18 @@ class Elm327Client(
         return merged.values.toList()
     }
 
+    private fun isNoData(response: String): Boolean =
+        response.uppercase().filterNot(Char::isWhitespace).contains("NODATA")
+
+    private fun diagnosticSnippet(response: String): String =
+        response
+            .replace('\r', ' ')
+            .replace('\n', '|')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { "<vide>" }
+            .take(180)
+
     private fun String.cleanHumanResponse(): String =
         lineSequence()
             .map(String::trim)
@@ -465,7 +600,9 @@ class Elm327Client(
     private companion object {
         const val AUTO_PROTOCOL_TIMEOUT_MS = 30_000L
         const val MANUAL_PROTOCOL_TIMEOUT_MS = 12_000L
+        const val NRC_RESPONSE_PENDING = 0x78
 
+        val UNSUPPORTED_SERVICE_NRCS = setOf(0x11, 0x12, 0x31)
         val VOLTAGE_REGEX = Regex("([0-9]+(?:[.,][0-9]+)?)\\s*[Vv]?")
         val PROTOCOL_TRY_ORDER = listOf("6", "8", "1", "7", "9", "2", "3", "4", "5")
 

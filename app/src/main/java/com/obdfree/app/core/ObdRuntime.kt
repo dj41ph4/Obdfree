@@ -3,6 +3,8 @@ package com.obdfree.app.core
 import android.content.Context
 import com.obdfree.app.core.obd.Elm327Client
 import com.obdfree.app.core.transport.BluetoothClassicTransport
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object ObdRuntime {
     @Volatile
@@ -10,6 +12,8 @@ object ObdRuntime {
 
     @Volatile
     private var clientInstance: Elm327Client? = null
+
+    private val sessionMutex = Mutex()
 
     fun transport(context: Context): BluetoothClassicTransport =
         transportInstance ?: synchronized(this) {
@@ -22,6 +26,9 @@ object ObdRuntime {
             clientInstance ?: Elm327Client(transport(context))
                 .also { clientInstance = it }
         }
+
+    suspend fun <T> exclusive(block: suspend () -> T): T =
+        sessionMutex.withLock { block() }
 }
 
 object ObdPrefs {
@@ -31,4 +38,5 @@ object ObdPrefs {
     const val CONTINUOUS_LAST_RUN = "continuous_clear_last_run"
     const val CONTINUOUS_LAST_ERROR = "continuous_clear_last_error"
     const val CONTINUOUS_WARNING_ACCEPTED = "continuous_clear_warning_accepted"
+    const val DPF_AUTO_DETECT = "dpf_auto_detect_enabled"
 }

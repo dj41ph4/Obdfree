@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseStorePath = System.getenv("OBDFREE_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("OBDFREE_KEYSTORE_PASSWORD")
+
 android {
     namespace = "com.obdfree.app"
     compileSdk = 36
@@ -11,8 +14,26 @@ android {
         applicationId = "com.obdfree.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.0.5"
+        versionCode = 11
+        versionName = "0.0.11"
+    }
+
+    signingConfigs {
+        if (!releaseStorePath.isNullOrBlank() && !releaseStorePassword.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(releaseStorePath)
+                storePassword = releaseStorePassword
+                keyAlias = "obdfree-release"
+                keyPassword = releaseStorePassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+            isMinifyEnabled = false
+        }
     }
 
     buildFeatures {
@@ -31,7 +52,6 @@ android {
 }
 
 dependencies {
-    // Compose 1.11.x: stable production line compatible with compileSdk 36.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     implementation(composeBom)
