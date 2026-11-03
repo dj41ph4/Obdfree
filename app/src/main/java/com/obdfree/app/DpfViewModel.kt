@@ -11,6 +11,8 @@ import androidx.lifecycle.viewModelScope
 import com.obdfree.app.core.ObdPrefs
 import com.obdfree.app.core.ObdRuntime
 import com.obdfree.app.core.obd.AstraJDpfMonitor
+import com.obdfree.app.model.AstraJEcuFamily
+import com.obdfree.app.model.DpfSnapshot
 import com.obdfree.app.model.DpfUiState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -64,6 +66,44 @@ class DpfViewModel(
     fun refreshNow() {
         if (_state.value.busy) return
         viewModelScope.launch { refreshFullSnapshot(showBusy = true) }
+    }
+
+    fun probeServiceControl() {
+        if (_state.value.serviceProbeBusy) return
+        viewModelScope.launch {
+            if (!hasBluetoothPermission()) {
+                _state.update { it.copy(errorMessage = "Autorisation Bluetooth requise.") }
+                return@launch
+            }
+            if (prefs.getBoolean(ObdPrefs.CONTINUOUS_CLEAR, false)) {
+                _state.update { it.copy(errorMessage = "Désactive l’effacement continu avant le test service.") }
+                return@launch
+            }
+
+            _state.update { it.copy(serviceProbeBusy = true, serviceProbeResult = null, errorMessage = null) }
+            try {
+                val probe = ObdRuntime.exclusive {
+                    ensureConnected()
+                    monitor.probeDeviceControl()
+                }
+                _state.update {
+                    it.copy(
+                        serviceProbeBusy = false,
+                        serviceProbeResult = probe.message +
+                            probe.rawResponse.takeIf(String::isNotBlank)?.let { raw -> " Réponse: $raw" }.orEmpty(),
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                _state.update {
+                    it.copy(
+                        serviceProbeBusy = false,
+                        serviceProbeResult = "Test AE impossible: ${friendlyError(error)}",
+                    )
+                }
+            }
+        }
     }
 
     private fun startAutoLoop() {
@@ -139,8 +179,8 @@ class DpfViewModel(
                 monitor.readSnapshot()
             }
 
-            _state.update {
-                it.copy(
+            _state.update { current ->
+                current.withSnapshotCapabilities(snapshot).copy(
                     snapshot = snapshot,
                     busy = false,
                     errorMessage = null,
@@ -172,7 +212,8 @@ class DpfViewModel(
                 current.copy(
                     snapshot = current.snapshot?.copy(
                         regenerationActive = status.active,
-                        regenerationProgressPercent = status.progressPercent,
+                        regenerationProgressPercent = status.progressPercent
+                            ?: current.snapshot.regenerationProgressPercent,
                         updatedAtMs = System.currentTimeMillis(),
                     ),
                     errorMessage = null,
@@ -183,6 +224,36 @@ class DpfViewModel(
         } catch (error: Throwable) {
             _state.update { it.copy(errorMessage = friendlyError(error)) }
         }
+    }
+
+    private fun DpfUiState.withSnapshotCapabilities(snapshot: DpfSnapshot): DpfUiState {
+        val identity = snapshot.ecuIdentity
+        val knownFamily = identity?.family == AstraJEcuFamily.DENSO_DECE01 ||
+            identity?.family == AstraJEcuFamily.GM_E87
+
+        val regenReason = when (identity?.family) {
+            AstraJEcuFamily.DENSO_DECE01 ->
+                "Denso DECe01 détecté. La régénération service existe sur cette famille; " +
+                    "le service GMLAN AE peut être testé sans lancer de régénération."
+            AstraJEcuFamily.GM_E87 ->
+                "GM E87 détecté. Les outils atelier exposent la régénération FAP; " +
+                    "le service GMLAN AE peut être testé sans lancer de régénération."
+            else ->
+                "ECU non identifié avec assez de certitude. Lecture FAP autorisée, commande service bloquée."
+        }
+
+        return copy(
+            // Exact DPF CPID is deliberately not guessed: AE controls many engine actuators.
+            serviceRegenerationAvailable = false,
+            serviceRegenerationReason = regenReason,
+            idleAdjustmentRecognized = knownFamily,
+            idleAdjustmentReason = if (knownFamily) {
+                "Réglage du ralenti reconnu par les outils atelier pour ${identity?.displayName}. " +
+                    "Valeur actuelle conservée avant toute future écriture."
+            } else {
+                "Réglage du ralenti disponible uniquement après identification fiable de l’ECU."
+            },
+        )
     }
 
     private suspend fun ensureConnected() {
@@ -205,11 +276,11 @@ class DpfViewModel(
     private fun friendlyError(error: Throwable): String {
         val raw = error.message.orEmpty()
         return when {
-            raw.contains("aucun PID FAP", ignoreCase = true) -> raw
-            raw.contains("223274", ignoreCase = true) -> raw
+            raw.contains("aucun profil FAP", ignoreCase = true) -> raw
+            raw.contains("aucun PID", ignoreCase = true) -> raw
             raw.contains("aucun calculateur", ignoreCase = true) -> "Calculateur moteur indisponible."
             raw.contains("Bluetooth", ignoreCase = true) -> "Communication Bluetooth interrompue."
-            raw.isNotBlank() -> raw.lineSequence().first().take(220)
+            raw.isNotBlank() -> raw.lineSequence().first().take(260)
             else -> "Lecture FAP impossible."
         }
     }
