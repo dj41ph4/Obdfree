@@ -166,13 +166,8 @@ fun DpfOverlay(
                         Text("Identifier ECU + actualiser FAP", color = Electric, fontWeight = FontWeight.Bold)
                     }
 
-                    ServiceRegenerationCard(
-                        state = state,
-                        continuousClearEnabled = continuousClearEnabled,
-                        onProbeServiceControl = onProbeServiceControl,
-                    )
-
-                    IdleAdjustmentCard(state)
+                    // No inert service-regeneration or idle buttons.
+                    // Only actions backed by verified ECU commands belong in the UI.
                 }
             },
             confirmButton = {
@@ -201,78 +196,6 @@ private fun EcuIdentityCard(identity: AstraJEcuIdentity) {
         identity.programmingDate?.let { Metric("Programmation", it) }
         identity.vin?.takeIf { it.length >= 6 }?.let { Metric("VIN", "…${it.takeLast(6)}") }
         if (identity.confidence > 0) Metric("Confiance", "${identity.confidence}%")
-    }
-}
-
-@Composable
-private fun ServiceRegenerationCard(
-    state: DpfUiState,
-    continuousClearEnabled: Boolean,
-    onProbeServiceControl: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.035f), RoundedCornerShape(15.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("Régénération service", color = TextPrimary, fontWeight = FontWeight.Black)
-        Text(state.serviceRegenerationReason, color = TextSecondary, fontSize = 11.sp)
-
-        OutlinedButton(
-            onClick = onProbeServiceControl,
-            enabled = !state.serviceProbeBusy && !continuousClearEnabled && state.snapshot != null,
-            modifier = Modifier.fillMaxWidth(),
-            border = BorderStroke(1.dp, Electric.copy(alpha = 0.45f)),
-        ) {
-            Text(
-                if (state.serviceProbeBusy) "Test GMLAN AE…" else "Tester le contrôle service GMLAN",
-                color = Electric,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-
-        state.serviceProbeResult?.let { InfoLine(it, Electric) }
-
-        Button(
-            onClick = {},
-            enabled = state.serviceRegenerationAvailable,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Danger, contentColor = DeepInk),
-        ) {
-            Text("Forcer une régénération", fontWeight = FontWeight.Black)
-        }
-
-        if (!state.serviceRegenerationAvailable) {
-            Text(
-                "Le service AE est testable sans actionner le moteur. Le CPID exact de régénération reste verrouillé tant qu’il n’est pas identifié : un CPID inventé pourrait commander un autre actionneur.",
-                color = TextSecondary,
-                fontSize = 10.sp,
-            )
-        }
-    }
-}
-
-@Composable
-private fun IdleAdjustmentCard(state: DpfUiState) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.White.copy(alpha = 0.035f), RoundedCornerShape(15.dp))
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Text("Réglage ralenti", color = TextPrimary, fontWeight = FontWeight.Black)
-        Text(state.idleAdjustmentReason, color = TextSecondary, fontSize = 11.sp)
-        InfoLine(
-            if (state.idleAdjustmentRecognized) {
-                "Fonction reconnue sur ce profil ECU • écriture encore verrouillée"
-            } else {
-                "Fonction non activée tant que l’ECU n’est pas identifié"
-            },
-            if (state.idleAdjustmentRecognized) Mint else TextSecondary,
-        )
     }
 }
 
@@ -314,16 +237,10 @@ private fun DpfMetrics(snapshot: DpfSnapshot) {
         snapshot.deviceControlStatusRaw?.let { Metric("État contrôle 32EB", it) }
         snapshot.deviceControlRejectRaw?.let { Metric("Refus contrôle 32EC", it) }
 
-        val naturalReady = snapshot.sootPercent?.let { it >= 80f } == true &&
-            snapshot.coolantTemperatureC?.let { it >= 70 } == true &&
-            snapshot.engineRpm?.let { it > 0 } == true
+        // Temperature/soot/RPM alone cannot prove that all ECM regeneration interlocks are met.
         InfoLine(
-            text = if (naturalReady) {
-                "Conditions principales de régénération automatique réunies"
-            } else {
-                "Conditions principales de régénération automatique non encore réunies"
-            },
-            color = if (naturalReady) Mint else TextSecondary,
+            text = "Éligibilité à une régénération : seule la décision du calculateur fait foi.",
+            color = TextSecondary,
         )
     }
 }
