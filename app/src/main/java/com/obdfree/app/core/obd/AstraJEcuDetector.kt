@@ -14,6 +14,7 @@ class AstraJEcuDetector(
         val engineCode = readTextLocalIdentifier(0x97, maxBytes = 24)
         val programmingDate = readDateLocalIdentifier(0x99)
         val supplier = readTextLocalIdentifier(0xDA, maxBytes = 24)
+            ?.takeIf { it.length >= 3 }
 
         classify(
             vin = vin,
@@ -31,6 +32,7 @@ class AstraJEcuDetector(
         programmingDate: String?,
         supplier: String?,
     ): AstraJEcuIdentity {
+        val normalizedEngine = engineCode?.trim()?.uppercase()
         val signature = listOfNotNull(systemId, engineCode, supplier)
             .joinToString(" ")
             .uppercase()
@@ -45,6 +47,14 @@ class AstraJEcuDetector(
         val confidence: Int
 
         when {
+            normalizedEngine == "A17DTS" -> {
+                // Astra J/Corsa/Mokka A17DTS is documented with the ACDelco E87 family.
+                // Once the ECU itself reports A17DTS through GMLAN 1A97, there is no value
+                // in keeping a deliberately low heuristic score.
+                family = AstraJEcuFamily.GM_E87
+                confidence = 100
+            }
+
             "DENSO" in signature -> {
                 family = AstraJEcuFamily.DENSO_DECE01
                 confidence = 98
@@ -69,7 +79,7 @@ class AstraJEcuDetector(
 
             e87Engines.any(signature::contains) -> {
                 family = AstraJEcuFamily.GM_E87
-                confidence = 82
+                confidence = 92
             }
 
             else -> {
