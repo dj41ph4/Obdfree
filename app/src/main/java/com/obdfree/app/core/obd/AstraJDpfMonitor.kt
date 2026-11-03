@@ -195,6 +195,7 @@ class AstraJDpfMonitor(
     }
 
     private suspend fun readE87Profile(): ProfileValues {
+        val aa = if (cachedIdentity?.engineCode?.contains("A17DTS", ignoreCase = true) == true) readA17DtsAaPackets() else Pair(null, null)
         val regenState = readRegenState20F2()
         val regenRequest = readDid("2220FA", 0x20FA, 1)?.firstOrNull()
         val legacyProgress = readDid("223274", 0x3274, 1)?.firstOrNull()
@@ -207,13 +208,15 @@ class AstraJDpfMonitor(
         val tempAstraJ = readDid("223279", 0x3279, 1)?.firstOrNull()
         val tempE87Fallback = readDid("2220F8", 0x20F8, 2)
 
-        val pressureAstraJ = readDid("223035", 0x3035, 1)?.firstOrNull()
+        // 3035 is the voltage of the differential-pressure sensor, not pressure in mbar.
+        val pressureAstraJ = readDid("223273", 0x3273, 1)?.firstOrNull()
         val pressureE87Fallback = readDid("2220F4", 0x20F4, 1)?.firstOrNull()
 
         val distanceAstraJ = readDid("223277", 0x3277, 3)
         val distanceE87Fallback = readDid("223039", 0x3039, 2)
 
-        val active = regenState?.let(::isActiveRegenState)
+        val active = aa.second?.regenerationProgressPercent?.let { it > 0f }
+            ?: regenState?.let(::isActiveRegenState)
             ?: regenRequest?.let { it and 0x01 != 0 }
             ?: legacyProgress?.let { it > 0 }
 
@@ -224,6 +227,8 @@ class AstraJDpfMonitor(
         return ProfileValues(
             profile = "GM E87 • Astra J 1.7",
             supported = listOf(
+                aa.first,
+                aa.second,
                 regenState,
                 regenRequest,
                 sootAstraJ,
@@ -234,18 +239,20 @@ class AstraJDpfMonitor(
                 pressureE87Fallback,
                 distanceAstraJ,
             ).any { it != null },
-            sootPercent = sootAstraJ?.let(AstraJDpfDecoder::directOrScaledPercent)
+            sootPercent = aa.first?.sootPercent
+                ?: sootAstraJ?.let(AstraJDpfDecoder::directOrScaledPercent)
                 ?: sootE87Fallback?.let(AstraJDpfDecoder::directOrScaledPercent),
             regenerationActive = active,
-            regenerationProgressPercent = legacyProgress?.let(AstraJDpfDecoder::regenerationProgress),
+            regenerationProgressPercent = aa.second?.regenerationProgressPercent
+                ?: legacyProgress?.let(AstraJDpfDecoder::regenerationProgress),
             exhaustTemperatureC = tempAstraJ?.let(AstraJDpfDecoder::temperatureFiveDegreeByte)
                 ?: tempE87Fallback?.let(AstraJDpfDecoder::temperatureTenthDegreeWord),
-            differentialPressureMbar = pressureAstraJ
-                ?.let { (it - 20).coerceAtLeast(0).toFloat() }
+            differentialPressureMbar = aa.first?.differentialPressureMbar
+                ?: pressureAstraJ?.let { it * 10f }
                 ?: pressureE87Fallback
                     ?.let(AstraJDpfDecoder::signedByte)
                     ?.let { abs(it) * 10f },
-            distanceSinceRegenerationKm = astraDistance ?: fallbackDistance,
+            distanceSinceRegenerationKm = aa.second?.distanceSinceRegenerationKm ?: astraDistance ?: fallbackDistance,
         )
     }
 
@@ -261,12 +268,17 @@ class AstraJDpfMonitor(
     }
 
     private suspend fun readRegenerationStatusInternal(family: AstraJEcuFamily): RegenerationStatus {
+        // An A17DTS-specific AA packet is more meaningful than a borrowed Astra-K DID.
+        val aa = if (family == AstraJEcuFamily.GM_E87 &&
+            cachedIdentity?.engineCode?.contains("A17DTS", ignoreCase = true) == true
+        ) readA17DtsAaPackets().second else null
         val state = readRegenState20F2()
         val request = readDid("2220FA", 0x20FA, 1)?.firstOrNull()
         val legacy = readDid("223274", 0x3274, 1)?.firstOrNull()
 
         val stateCode = state?.and(0x07)
         val active = when {
+            aa != null -> aa.regenerationProgressPercent > 0f
             stateCode != null -> isActiveRegenState(stateCode)
             family == AstraJEcuFamily.DENSO_DECE01 && legacy != null -> legacy > 0
             request != null -> request and 0x01 != 0
@@ -276,9 +288,33 @@ class AstraJDpfMonitor(
 
         return RegenerationStatus(
             active = active,
-            progressPercent = legacy?.let(AstraJDpfDecoder::regenerationProgress),
+            progressPercent = aa?.regenerationProgressPercent ?: legacy?.let(AstraJDpfDecoder::regenerationProgress),
             stateLabel = stateCode?.let(::regenStateLabel),
         )
+    }
+
+    /**
+     * Opel GM AA diagnostic packets use response ID 5E8 rather than the usual 7E8.
+     * These are read-only requests. Always restore the response filter before Mode 01/22.
+     */
+    private suspend fun readA17DtsAaPackets(): Pair<GmAaDpfCodec.Packet29?, GmAaDpfCodec.Packet2A?> {
+        val headers = runCatching { client.command("ATH1", 4_000) }.getOrNull()
+        val filter = runCatching { client.command("ATCRA5E8", 4_000) }.getOrNull()
+        if (headers == null || filter == null || headers.contains("?") || filter.contains("?")) {
+            runCatching { client.command("ATCRA7E8", 4_000) }
+            runCatching { client.command("ATH0", 4_000) }
+            return Pair(null, null)
+        }
+        return try {
+            val p29 = runCatching { client.command("AA0329", 5_000) }.getOrNull()
+                ?.let(GmAaDpfCodec::packet29)
+            val p2a = runCatching { client.command("AA032A", 5_000) }.getOrNull()
+                ?.let(GmAaDpfCodec::packet2A)
+            Pair(p29, p2a)
+        } finally {
+            runCatching { client.command("ATCRA7E8", 4_000) }
+            runCatching { client.command("ATH0", 4_000) }
+        }
     }
 
     private suspend fun readRegenState20F2(): Int? =
@@ -318,6 +354,7 @@ class AstraJDpfMonitor(
         return try {
             block()
         } finally {
+            runCatching { client.command("ATCRA", 4_000) }
             runCatching { client.command("ATSH7DF", 4_000) }
             runCatching { client.command("ATSP0", 4_000) }
         }
