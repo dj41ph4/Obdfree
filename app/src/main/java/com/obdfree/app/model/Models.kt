@@ -42,6 +42,11 @@ data class ClearHistory(
         get() = warmupsSinceClear != null || distanceSinceClearKm != null || minutesSinceClear != null
 }
 
+data class VoltageSample(
+    val timestampMs: Long,
+    val volts: Float,
+)
+
 data class LiveDataSnapshot(
     val rpm: Int? = null,
     val speedKph: Int? = null,
@@ -58,6 +63,10 @@ data class DiagnosticUiState(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val adapterIdentity: String? = null,
     val adapterVoltage: Float? = null,
+    val voltageSamples: List<VoltageSample> = emptyList(),
+    val lastVoltageSampleAtMs: Long? = null,
+    val voltageMonitoringActive: Boolean = false,
+    val voltageReadError: String? = null,
     val protocol: String? = null,
     val troubleCodes: List<TroubleCode> = emptyList(),
     val clearHistory: ClearHistory? = null,
