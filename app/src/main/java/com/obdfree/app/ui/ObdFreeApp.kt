@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,12 +54,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathJoin
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,6 +77,7 @@ import com.obdfree.app.model.DiagnosticUiState
 import com.obdfree.app.model.DtcStatus
 import com.obdfree.app.model.TroubleCode
 import com.obdfree.app.model.VehicleProfile
+import com.obdfree.app.model.VoltageSample
 import com.obdfree.app.ui.theme.Danger
 import com.obdfree.app.ui.theme.DeepInk
 import com.obdfree.app.ui.theme.Electric
@@ -80,6 +87,9 @@ import com.obdfree.app.ui.theme.GlassStrong
 import com.obdfree.app.ui.theme.Mint
 import com.obdfree.app.ui.theme.TextPrimary
 import com.obdfree.app.ui.theme.TextSecondary
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun ObdFreeApp(
@@ -133,6 +143,8 @@ fun ObdFreeApp(
                     onConnect = onConnect,
                 )
             }
+
+            item { VoltageCard(state) }
 
             if (state.errorMessage != null) {
                 item { ErrorBanner(state.errorMessage) }
@@ -515,6 +527,154 @@ private fun AdapterRememberedRow(onChooseAdapter: () -> Unit, name: String, cont
             )
         }
         Text("Changer", color = Electric, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * 90 last measurements (~90 s); locally sampled while the Activity is visible.
+ * Displays freshness and errors; never claims an ECU/battery-terminal voltage.
+ */
+@Composable
+private fun VoltageCard(state: DiagnosticUiState) {
+    val connected = state.connectionState == ConnectionState.CONNECTED
+    val voltage = state.adapterVoltage.takeIf { connected }
+    val trace = state.voltageSamples
+    val status = when {
+        !connected -> "Non connecté"
+        state.continuousClearEnabled -> "En pause · effacement actif"
+        state.isBusy -> "En pause · diagnostic"
+        state.voltageMonitoringActive -> "EN DIRECT · ~1 s"
+        state.voltageReadError != null -> "Mesure indisponible"
+        else -> "En attente de mesure"
+    }
+    val min = trace.minOfOrNull { it.volts }
+    val max = trace.maxOfOrNull { it.volts }
+
+    GlassPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Tension alimentation OBD",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 16.sp,
+                    )
+                    Text(
+                        status,
+                        color = if (state.voltageMonitoringActive && connected && !state.isBusy) Mint else TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(
+                    voltage?.let { String.format(Locale.getDefault(), "%.1f V", it) } ?: "— V",
+                    color = if (connected && voltage != null) Electric else TextSecondary,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 30.sp,
+                )
+            }
+
+            VoltageTrace(trace)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "Min ${min?.let { String.format(Locale.getDefault(), "%.1f V", it) } ?: "—"}",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                )
+                Text(
+                    "Max ${max?.let { String.format(Locale.getDefault(), "%.1f V", it) } ?: "—"}",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                )
+                Text(
+                    state.lastVoltageSampleAtMs?.let {
+                        "Mesuré à " + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it))
+                    } ?: "Aucune mesure",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                )
+            }
+
+            state.voltageReadError?.takeIf { connected }?.let { message ->
+                Text(
+                    message,
+                    color = Danger,
+                    fontSize = 11.sp,
+                )
+            }
+            Text(
+                "Mesure indicative sur l'entrée du dongle ELM327 (prise OBD). " +
+                    "L'application ne mesure pas la tension de la colonne de direction. " +
+                    "Pause automatique pendant les diagnostics et en arrière-plan.",
+                color = TextSecondary,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoltageTrace(history: List<VoltageSample>) {
+    val voltages = history.map { it.volts }
+    val low = (voltages.minOrNull() ?: 12f) - 0.25f
+    val high = (voltages.maxOrNull() ?: 13f) + 0.25f
+    val range = (high - low).coerceAtLeast(0.5f)
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = 0.035f)),
+    ) {
+        for (f in listOf(0.25f, 0.5f, 0.75f)) {
+            val y = size.height * f
+            drawLine(
+                color = GlassBorder.copy(alpha = 0.35f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1.dp.toPx(),
+            )
+        }
+
+        if (voltages.isNotEmpty()) {
+            fun position(i: Int): Offset {
+                val x = if (voltages.size <= 1) size.width / 2f
+                    else i.toFloat() / (voltages.size - 1) * size.width
+                val y = size.height * (1f - (voltages[i] - low) / range)
+                return Offset(x, y.coerceIn(0f, size.height))
+            }
+
+            val line = Path().apply {
+                val first = position(0)
+                moveTo(first.x, first.y)
+                for (i in 1 until voltages.size) {
+                    val next = position(i)
+                    lineTo(next.x, next.y)
+                }
+            }
+            if (voltages.size > 1) {
+                drawPath(
+                    path = line,
+                    color = Electric,
+                    style = Stroke(
+                        width = 2.5.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = PathJoin.Round,
+                    ),
+                )
+            }
+            drawCircle(
+                color = Mint,
+                radius = 3.5.dp.toPx(),
+                center = position(voltages.lastIndex),
+            )
+        }
     }
 }
 
