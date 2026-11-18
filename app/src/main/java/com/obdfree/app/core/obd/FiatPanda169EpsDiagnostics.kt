@@ -1,57 +1,58 @@
 package com.obdfree.app.core.obd
 
 /**
- * Fiat Panda II (169) / Delphi EPS - lecture experimentalement prise en charge.
+ * Fiat Panda II (169), Delphi EPS, ligne K sur la broche OBD 9 (A1 vert).
  *
- * La direction communique sur une ligne K physique (OBD pin 9, adaptateur A1).
- * L'ELM327 utilise normalement la broche 7; le logiciel ne peut pas router les
- * broches. L'initialisation KWP a l'adresse 10 est un point de depart et DOIT
- * etre validee contre la reference ECU equipee sur le vehicule.
+ * IMPORTANT: 0x10 n'est qu'une adresse KWP candidate issue de conventions
+ * d'adressage generales, pas une adresse Delphi EPS confirmee sur le vehicule.
+ * La liaison devra etre validee contre un diagnostic Fiat de reference.
  *
- * Strictement lecture seule : pas de clear DTC, calibration, actionneur, ni codage.
+ * Lecture seule. Pas de scan d'adresses, de routine, d'effacement ni de codage.
  */
 class FiatPanda169EpsDiagnostics(
     private val send: suspend (String, Long) -> String,
 ) {
     suspend fun readFaults(): FiatKwpReport {
-        // Ne jamais faire de scan d'adresses au hasard et ne jamais faire de
-        // broadcast sur le reseau de la voiture.
-        required("ATPC")
-        required("ATM0")
-        required("ATTP4")
-        required("ATIIA10")
-        required("ATSH8010F1")
-        required("ATH1")
-        required("ATSTFF")
-
+        // Referentiel de session volontairement fixe: pas de balayage KWP.
+        // Meme la configuration doit etre sous finally pour liberer la ligne
+        // si un clone refuse AT IIA ou AT SI.
         try {
-            // ATSI effectue un init 5 baud vers l'adresse configuree.
+            required("ATPC")
+            required("ATSP4") // ISO 14230-4 KWP, 5-baud slow init
+            required("ATIIA10") // PROVISOIRE, adresse non validee sur Delphi EPS
+            required("ATSH8010F1")
+            required("ATH1")
+            required("ATSTFF")
+
             val init = send("ATSI", 15_000)
             if (isError(init)) {
-                error("L'ELM327 n'a pas pu initialiser le calculateur de direction : " + init.take(180))
+                error("Initialisation K-Line EPS impossible : " + init.take(180))
             }
+
             val response = send("1800FF00", 15_000)
-            if (isError(response)) error("Lecture EPS impossible : " + response.take(180))
+            if (isError(response)) {
+                error("Lecture EPS impossible : " + response.take(180))
+            }
             return FiatKwpDtcDecoder.decode(response)
         } finally {
-            // Ferme la session KWP. Le moteur OBD-II generique est restaure
-            // par le ViewModel lors de la sortie de ce diagnostic.
+            // Le ViewModel reinitialise ensuite l'ELM SANS sonder le moteur
+            // puisque le cable A1 redirige physiquement la broche 7.
             runCatching { send("ATPC", 5_000) }
         }
     }
 
     private suspend fun required(command: String) {
-        val reply = send(command, 6_000)
-        if (isError(reply)) error("Commande ELM327 non supportee : $command ($reply)")
+        val response = send(command, 6_000)
+        if (isError(response)) {
+            error("Commande ELM327 non supportee : $command (${response.take(100)})")
+        }
     }
 
-    private fun isError(response: String): Boolean {
-        val upper = response.uppercase()
-        return response.isBlank() ||
-            upper.contains("?") ||
-            upper.contains("ERROR") ||
-            upper.contains("NO DATA") ||
-            upper.contains("UNABLE TO CONNECT") ||
-            upper.contains("STOPPED")
+    private fun isError(reply: String): Boolean {
+        val upper = reply.uppercase()
+        return reply.isBlank() || listOf(
+            "?", "ERROR", "NO DATA", "UNABLE TO CONNECT",
+            "STOPPED", "BUS INIT", "BUS ERROR", "RX ERROR",
+        ).any(upper::contains)
     }
 }
