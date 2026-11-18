@@ -16,6 +16,7 @@ import com.obdfree.app.core.obd.FiatPanda169EpsDiagnostics
 import com.obdfree.app.model.BluetoothAdapterItem
 import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
+import com.obdfree.app.model.VehicleProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -49,6 +50,9 @@ class ObdViewModel(
     private val _state = MutableStateFlow(
         DiagnosticUiState(
             permissionGranted = hasBluetoothPermission(),
+            vehicleProfile = runCatching {
+                VehicleProfile.valueOf(prefs.getString(ObdPrefs.VEHICLE_PROFILE, null) ?: VehicleProfile.GENERIC.name)
+            }.getOrDefault(VehicleProfile.GENERIC),
             continuousClearEnabled = prefs.getBoolean(ObdPrefs.CONTINUOUS_CLEAR, false),
             continuousClearLastRunMs = prefs.getLong(ObdPrefs.CONTINUOUS_LAST_RUN, 0L).takeIf { it > 0L },
             continuousClearError = prefs.getString(ObdPrefs.CONTINUOUS_LAST_ERROR, null),
@@ -66,6 +70,19 @@ class ObdViewModel(
     override fun onCleared() {
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onCleared()
+    }
+
+    fun selectVehicleProfile(profile: VehicleProfile) {
+        if (_state.value.isBusy || _state.value.continuousClearEnabled) return
+        prefs.edit().putString(ObdPrefs.VEHICLE_PROFILE, profile.name).apply()
+        _state.update {
+            it.copy(
+                vehicleProfile = profile,
+                fiatEpsReport = null,
+                fiatEpsMessage = null,
+                errorMessage = null,
+            )
+        }
     }
 
     fun onPermissionResult(granted: Boolean) {
@@ -236,6 +253,7 @@ class ObdViewModel(
      */
     fun scanFiatEps() {
         if (_state.value.continuousClearEnabled ||
+            _state.value.vehicleProfile != VehicleProfile.FIAT_PANDA_169 ||
             _state.value.connectionState != ConnectionState.CONNECTED ||
             _state.value.isBusy
         ) return
