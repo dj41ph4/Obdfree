@@ -210,7 +210,7 @@ class ObdViewModel(
     }
 
     fun scan() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
@@ -325,7 +325,7 @@ class ObdViewModel(
     }
 
     fun clearCodes() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
