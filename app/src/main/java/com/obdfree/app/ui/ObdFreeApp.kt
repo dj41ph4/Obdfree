@@ -141,7 +141,8 @@ fun ObdFreeApp(
             item {
                 Button(
                     onClick = onScan,
-                    enabled = state.connectionState == ConnectionState.CONNECTED &&
+                    enabled = state.vehicleProfile == VehicleProfile.GENERIC &&
+                        state.connectionState == ConnectionState.CONNECTED &&
                         !state.isBusy &&
                         !state.continuousClearEnabled,
                     modifier = Modifier
@@ -169,6 +170,7 @@ fun ObdFreeApp(
                         text = when {
                             state.continuousClearEnabled -> "Effacement continu actif"
                             state.isBusy -> state.statusMessage
+                            state.vehicleProfile == VehicleProfile.FIAT_PANDA_169 -> "Scan moteur indisponible avec A1"
                             else -> "Lire les codes défaut"
                         },
                         fontWeight = FontWeight.Black,
@@ -193,19 +195,21 @@ fun ObdFreeApp(
                 }
             }
 
-            item {
-                ContinuousClearCard(
-                    enabled = state.continuousClearEnabled,
-                    canEnable = state.selectedAdapter != null && state.permissionGranted,
-                    lastError = state.continuousClearError,
-                    onChanged = { enabled ->
-                        if (enabled && !continuousWarningAccepted()) {
-                            showContinuousWarning = true
-                        } else {
-                            onContinuousClearChanged(enabled)
-                        }
-                    },
-                )
+            if (state.vehicleProfile == VehicleProfile.GENERIC) {
+                item {
+                    ContinuousClearCard(
+                        enabled = state.continuousClearEnabled,
+                        canEnable = state.selectedAdapter != null && state.permissionGranted,
+                        lastError = state.continuousClearError,
+                        onChanged = { enabled ->
+                            if (enabled && !continuousWarningAccepted()) {
+                                showContinuousWarning = true
+                            } else {
+                                onContinuousClearChanged(enabled)
+                            }
+                        },
+                    )
+                }
             }
 
             state.clearHistory?.let { history ->
@@ -234,7 +238,9 @@ fun ObdFreeApp(
                 }
             }
 
-            if (state.connectionState == ConnectionState.CONNECTED && !state.continuousClearEnabled) {
+            if (state.vehicleProfile == VehicleProfile.GENERIC &&
+                state.connectionState == ConnectionState.CONNECTED && !state.continuousClearEnabled
+            ) {
                 item {
                     OutlinedButton(
                         onClick = { showClearDialog = true },
@@ -437,7 +443,9 @@ private fun ConnectionCard(
                     )
                 }
 
-                if (state.connectionState == ConnectionState.CONNECTED || state.continuousClearEnabled) {
+                if ((state.connectionState == ConnectionState.CONNECTED || state.continuousClearEnabled) &&
+                    state.vehicleProfile == VehicleProfile.GENERIC
+                ) {
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
@@ -641,6 +649,14 @@ private fun FiatPanda169EpsCard(
                     fontSize = 11.sp,
                 )
             }
+            Text(
+                "Contact mis, voiture garee, sans manipulation du volant. " +
+                    "Apres avoir branche le cable vert A1, reconnecte le dongle Bluetooth. " +
+                    "Pour lire le moteur, retire A1, repasse en mode Universel et reconnecte.",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
             Text(
                 "Aucun effacement ni calibrage de direction. Un echec de liaison " +
                     "ne signifie pas que le vehicule est sans defaut.",
