@@ -21,6 +21,37 @@ class FiatPanda169EpsTest {
         assertTrue(FiatKwpDtcDecoder.decode("82 F1 10 58 00 DB").faults.isEmpty())
     }
 
+    @Test fun acceptsExtendedKwpLengthHeader() {
+        // Format=80 indicates an extra payload-length byte.
+        assertTrue(FiatKwpDtcDecoder.decode("80 F1 10 02 58 00 DB").faults.isEmpty())
+    }
+
+    @Test fun rejectsCorruptChecksumInsteadOfClaimingZeroFaults() {
+        var rejected = false
+        try { FiatKwpDtcDecoder.decode("82 F1 10 58 00 DC") } catch (_: IllegalStateException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+    }
+
+    @Test fun ignoresForeignEcuReply() {
+        var rejected = false
+        try { FiatKwpDtcDecoder.decode("82 F1 11 58 00 DC") } catch (_: IllegalStateException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+    }
+
+    @Test fun rejectsBufferFullEvenWithTruncatedPositiveReply() {
+        var rejected = false
+        try {
+            FiatKwpDtcDecoder.decode("58 00\\nBUFFER FULL")
+        } catch (_: IllegalStateException) {
+            rejected = true
+        }
+        assertTrue(rejected)
+    }
+
     @Test fun rejectsTruncatedFaultsInsteadOfReportingCleanEcu() {
         var rejected = false
         try { FiatKwpDtcDecoder.decode("58 02 50 01 12") } catch (_: IllegalArgumentException) { rejected = true }
