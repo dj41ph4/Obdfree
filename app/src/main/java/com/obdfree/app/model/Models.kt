@@ -1,5 +1,7 @@
 package com.obdfree.app.model
 
+import com.obdfree.app.core.obd.FiatKwpReport
+
 data class BluetoothAdapterItem(
     val name: String,
     val address: String,
@@ -11,6 +13,11 @@ enum class ConnectionState {
     INITIALIZING,
     CONNECTED,
     ERROR,
+}
+
+enum class VehicleProfile {
+    GENERIC,
+    FIAT_PANDA_169,
 }
 
 enum class DtcStatus {
@@ -35,6 +42,11 @@ data class ClearHistory(
         get() = warmupsSinceClear != null || distanceSinceClearKm != null || minutesSinceClear != null
 }
 
+data class VoltageSample(
+    val timestampMs: Long,
+    val volts: Float,
+)
+
 data class LiveDataSnapshot(
     val rpm: Int? = null,
     val speedKph: Int? = null,
@@ -44,14 +56,22 @@ data class LiveDataSnapshot(
 
 data class DiagnosticUiState(
     val permissionGranted: Boolean = false,
+    val vehicleProfile: VehicleProfile = VehicleProfile.GENERIC,
     val bluetoothAvailable: Boolean = true,
     val pairedAdapters: List<BluetoothAdapterItem> = emptyList(),
     val selectedAdapter: BluetoothAdapterItem? = null,
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val adapterIdentity: String? = null,
+    val adapterVoltage: Float? = null,
+    val voltageSamples: List<VoltageSample> = emptyList(),
+    val lastVoltageSampleAtMs: Long? = null,
+    val voltageMonitoringActive: Boolean = false,
+    val voltageReadError: String? = null,
     val protocol: String? = null,
     val troubleCodes: List<TroubleCode> = emptyList(),
     val clearHistory: ClearHistory? = null,
+    val fiatEpsReport: FiatKwpReport? = null,
+    val fiatEpsMessage: String? = null,
     val continuousClearEnabled: Boolean = false,
     val continuousClearLastRunMs: Long? = null,
     val continuousClearError: String? = null,

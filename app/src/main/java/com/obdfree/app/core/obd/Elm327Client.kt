@@ -8,6 +8,8 @@ import com.obdfree.app.model.TroubleCode
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ElmInitialization(
     val identity: String,
@@ -23,19 +25,35 @@ class Elm327Client(
     private var protocolDescription: String? = null
     private var adapterVoltage: Float? = null
     private var recovering = false
+    // Prevent interleaved write/read cycles from corrupting ELM replies.
+    private val commandMutex = Mutex()
 
-    suspend fun initialize(): ElmInitialization {
+    /**
+     * Bluetooth/ELM handshake only: deliberately does not probe engine OBD-II.
+     * Required when an A1 K-line adapter routes pin 7 to the Panda EPS pin 9.
+     * A successful handshake is NOT proof that a vehicle ECU can be reached.
+     */
+    suspend fun initializeAdapterOnly(): ElmInitialization {
         val identity = command("ATZ", timeoutMs = 7_000)
         delay(700)
-
         configureAdapter()
+        protocolNumber = null
+        protocolDescription = null
         adapterVoltage = readAdapterVoltage()
-
-        establishVehicleProtocol()
-        refreshProtocolIdentity()
 
         return ElmInitialization(
             identity = identity.cleanHumanResponse().ifBlank { "ELM327 compatible" },
+            protocol = null,
+            protocolNumber = null,
+            adapterVoltage = adapterVoltage,
+        )
+    }
+
+    suspend fun initialize(): ElmInitialization {
+        val adapter = initializeAdapterOnly()
+        establishVehicleProtocol()
+        refreshProtocolIdentity()
+        return adapter.copy(
             protocol = protocolDescription,
             protocolNumber = protocolNumber,
             adapterVoltage = adapterVoltage,
@@ -140,11 +158,11 @@ class Elm327Client(
     suspend fun command(
         value: String,
         timeoutMs: Long = 5_000,
-    ): String {
+    ): String = commandMutex.withLock {
         drainInput()
         transport.write((value.trim() + "\r").encodeToByteArray())
 
-        return withTimeout(timeoutMs) {
+        withTimeout(timeoutMs) {
             val buffer = StringBuilder()
             while (true) {
                 val bytes = transport.readAvailable()
@@ -159,6 +177,13 @@ class Elm327Client(
             @Suppress("UNREACHABLE_CODE")
             ""
         }
+    }
+
+    /** Sample the ELM's OBD input voltage without querying any vehicle ECU. */
+    suspend fun readInputVoltage(): Float {
+        val reply = command("ATRV", timeoutMs = 3_000L)
+        return ElmVoltage.parse(reply)
+            ?: error("Tension ELM327 indisponible ou reponse incorrecte.")
     }
 
     private suspend fun configureAdapter() {

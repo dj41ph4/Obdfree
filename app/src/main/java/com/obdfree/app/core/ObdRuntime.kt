@@ -26,6 +26,7 @@ object ObdRuntime {
 
 object ObdPrefs {
     const val NAME = "obdfree"
+    const val VEHICLE_PROFILE = "vehicle_profile"
     const val LAST_DEVICE = "last_device_address"
     const val CONTINUOUS_CLEAR = "continuous_clear_enabled"
     const val CONTINUOUS_LAST_RUN = "continuous_clear_last_run"

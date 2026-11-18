@@ -44,6 +44,8 @@ class MainActivity : ComponentActivity() {
                     onSelectAdapter = viewModel::selectAdapter,
                     onConnect = viewModel::connect,
                     onScan = viewModel::scan,
+                    onScanFiatEps = viewModel::scanFiatEps,
+                    onSelectVehicleProfile = viewModel::selectVehicleProfile,
                     onClearCodes = viewModel::clearCodes,
                     onContinuousClearChanged = ::setContinuousClear,
                     continuousWarningAccepted = viewModel::continuousWarningAccepted,
@@ -55,6 +57,16 @@ class MainActivity : ComponentActivity() {
         if (viewModel.state.value.continuousClearEnabled) {
             runCatching { ContinuousClearService.start(this) }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.setVoltageMonitoringActive(true)
+    }
+
+    override fun onStop() {
+        viewModel.setVoltageMonitoringActive(false)
+        super.onStop()
     }
 
     private fun requestBluetoothPermission() {

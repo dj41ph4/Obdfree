@@ -12,10 +12,19 @@ import androidx.lifecycle.viewModelScope
 import com.obdfree.app.core.ObdPrefs
 import com.obdfree.app.core.ObdRuntime
 import com.obdfree.app.core.obd.DtcKnowledgeService
+import com.obdfree.app.core.obd.ElmVoltage
+import com.obdfree.app.core.obd.FiatPanda169EpsDiagnostics
 import com.obdfree.app.model.BluetoothAdapterItem
 import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
+import com.obdfree.app.model.VehicleProfile
+import com.obdfree.app.model.VoltageSample
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +41,8 @@ class ObdViewModel(
     private val client = ObdRuntime.client(application)
     private val knowledge = DtcKnowledgeService(application)
     private val prefs = application.getSharedPreferences(ObdPrefs.NAME, Context.MODE_PRIVATE)
+    private var voltageForeground = false
+    private var voltagePollJob: Job? = null
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (
@@ -46,6 +57,9 @@ class ObdViewModel(
     private val _state = MutableStateFlow(
         DiagnosticUiState(
             permissionGranted = hasBluetoothPermission(),
+            vehicleProfile = runCatching {
+                VehicleProfile.valueOf(prefs.getString(ObdPrefs.VEHICLE_PROFILE, null) ?: VehicleProfile.GENERIC.name)
+            }.getOrDefault(VehicleProfile.GENERIC),
             continuousClearEnabled = prefs.getBoolean(ObdPrefs.CONTINUOUS_CLEAR, false),
             continuousClearLastRunMs = prefs.getLong(ObdPrefs.CONTINUOUS_LAST_RUN, 0L).takeIf { it > 0L },
             continuousClearError = prefs.getString(ObdPrefs.CONTINUOUS_LAST_ERROR, null),
@@ -61,8 +75,130 @@ class ObdViewModel(
     }
 
     override fun onCleared() {
+        stopVoltageMonitoring()
         prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onCleared()
+    }
+
+    /**
+     * Observe voltage only while the Activity is visible. This avoids waking
+     * the phone / draining the parked car while the app is in the background.
+     */
+    fun setVoltageMonitoringActive(visible: Boolean) {
+        voltageForeground = visible
+        if (visible) startVoltageMonitoring() else stopVoltageMonitoring()
+    }
+
+    private fun startVoltageMonitoring() {
+        val current = _state.value
+        if (!voltageForeground ||
+            current.connectionState != ConnectionState.CONNECTED ||
+            current.continuousClearEnabled ||
+            voltagePollJob?.isActive == true
+        ) return
+
+        voltagePollJob = viewModelScope.launch {
+            try {
+                while (isActive &&
+                    voltageForeground &&
+                    _state.value.connectionState == ConnectionState.CONNECTED &&
+                    !_state.value.continuousClearEnabled
+                ) {
+                    // Avoid interleaving AT RV with a multi-command ECU scan.
+                    // The client also serializes individual write/read cycles.
+                    if (!_state.value.isBusy) {
+                        if (!transport.isConnected) {
+                            _state.update {
+                                it.copy(
+                                    voltageMonitoringActive = false,
+                                    voltageReadError = "Adaptateur Bluetooth deconnecte",
+                                )
+                            }
+                            break
+                        }
+
+                        try {
+                            val voltage = client.readInputVoltage()
+                            val timestamp = System.currentTimeMillis()
+                            _state.update {
+                                it.copy(
+                                    adapterVoltage = voltage,
+                                    lastVoltageSampleAtMs = timestamp,
+                                    voltageSamples = ElmVoltage.append(
+                                        it.voltageSamples,
+                                        VoltageSample(timestamp, voltage),
+                                    ),
+                                    voltageMonitoringActive = true,
+                                    voltageReadError = null,
+                                )
+                            }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            _state.update {
+                                it.copy(
+                                    voltageMonitoringActive = false,
+                                    voltageReadError = error.message?.take(120)
+                                        ?: "Lecture ATRV non disponible",
+                                )
+                            }
+                        }
+                    }
+                    delay(ElmVoltage.POLL_INTERVAL_MS)
+                }
+            } finally {
+                _state.update { it.copy(voltageMonitoringActive = false) }
+            }
+        }
+    }
+
+    private fun stopVoltageMonitoring() {
+        voltagePollJob?.cancel()
+        voltagePollJob = null
+        _state.update { it.copy(voltageMonitoringActive = false) }
+    }
+
+    fun selectVehicleProfile(profile: VehicleProfile) {
+        if (_state.value.isBusy || _state.value.continuousClearEnabled ||
+            _state.value.vehicleProfile == profile
+        ) return
+
+        // Changing the physical OBD pin requires reconnecting the ELM session.
+        // Avoid treating a previous generic engine connection as an EPS connection.
+        val inFlightPoll = voltagePollJob
+        stopVoltageMonitoring()
+        _state.update { it.copy(isBusy = true, statusMessage = "Changement de profil…") }
+        viewModelScope.launch {
+            inFlightPoll?.join()
+            try {
+                transport.disconnect()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Continue: the next connect will create/reset a new ELM session.
+            }
+            prefs.edit().putString(ObdPrefs.VEHICLE_PROFILE, profile.name).apply()
+            _state.update {
+                it.copy(
+                    vehicleProfile = profile,
+                    connectionState = ConnectionState.DISCONNECTED,
+                    adapterIdentity = null,
+                    adapterVoltage = null,
+                    lastVoltageSampleAtMs = null,
+                    voltageSamples = emptyList(),
+                    voltageReadError = null,
+                    voltageMonitoringActive = false,
+                    protocol = null,
+                    troubleCodes = emptyList(),
+                    clearHistory = null,
+                    fiatEpsReport = null,
+                    fiatEpsMessage = null,
+                    isBusy = false,
+                    statusMessage = "Profil change. Adapte le cable avant de reconnecter.",
+                    errorMessage = null,
+                )
+            }
+        }
     }
 
     fun onPermissionResult(granted: Boolean) {
@@ -128,7 +264,8 @@ class ObdViewModel(
     }
 
     fun connect() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
+        stopVoltageMonitoring()
 
         val adapter = _state.value.selectedAdapter
             ?: return setError(IllegalStateException("Choisis un adaptateur Bluetooth"), "Connexion")
@@ -143,6 +280,10 @@ class ObdViewModel(
                     connectionState = ConnectionState.CONNECTING,
                     isBusy = true,
                     statusMessage = "Connexion à ${adapter.name}…",
+                    adapterVoltage = null,
+                    lastVoltageSampleAtMs = null,
+                    voltageSamples = emptyList(),
+                    voltageReadError = null,
                     errorMessage = null,
                 )
             }
@@ -159,19 +300,37 @@ class ObdViewModel(
                     )
                 }
 
-                val info = client.initialize()
+                val profile = _state.value.vehicleProfile
+                val info = if (profile == VehicleProfile.FIAT_PANDA_169) {
+                    // A1 cable: engine pin 7 is not routed; do not probe the engine.
+                    client.initializeAdapterOnly()
+                } else {
+                    client.initialize()
+                }
                 prefs.edit().putString(ObdPrefs.LAST_DEVICE, adapter.address).apply()
+                val now = System.currentTimeMillis()
 
                 _state.update {
                     it.copy(
                         connectionState = ConnectionState.CONNECTED,
                         adapterIdentity = info.identity,
+                        adapterVoltage = info.adapterVoltage,
+                        lastVoltageSampleAtMs = info.adapterVoltage?.let { now },
+                        voltageSamples = info.adapterVoltage?.let {
+                            listOf(VoltageSample(now, it))
+                        }.orEmpty(),
+                        voltageReadError = null,
                         protocol = info.protocol,
                         isBusy = false,
-                        statusMessage = "Connecté à ${adapter.name}",
+                        statusMessage = if (profile == VehicleProfile.FIAT_PANDA_169) {
+                            "ELM pret, calculateur EPS non encore verifie"
+                        } else {
+                            "Connecté à ${adapter.name}"
+                        },
                         errorMessage = null,
                     )
                 }
+                startVoltageMonitoring()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -189,7 +348,9 @@ class ObdViewModel(
     }
 
     fun scan() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.vehicleProfile != VehicleProfile.GENERIC ||
+            _state.value.continuousClearEnabled || _state.value.isBusy
+        ) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
@@ -226,8 +387,87 @@ class ObdViewModel(
         }
     }
 
+    /**
+     * Experimental Panda 169 Delphi EPS diagnostics on OBD pin 9 via A1 adapter.
+     * Strictly read-only. Never run alongside generic requests or continuous clear.
+     * Reinitialise the ELM adapter only after the manufacturer session (A1 cable).
+     */
+    fun scanFiatEps() {
+        if (_state.value.continuousClearEnabled ||
+            _state.value.vehicleProfile != VehicleProfile.FIAT_PANDA_169 ||
+            _state.value.connectionState != ConnectionState.CONNECTED ||
+            _state.value.isBusy
+        ) return
+
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isBusy = true,
+                    fiatEpsReport = null,
+                    fiatEpsMessage = "Lecture direction Delphi en cours…",
+                    errorMessage = null,
+                )
+            }
+
+            try {
+                val diagnostic = FiatPanda169EpsDiagnostics { request, timeout ->
+                    client.command(request, timeout)
+                }
+                val report = diagnostic.readFaults()
+                _state.update {
+                    it.copy(
+                        fiatEpsReport = report,
+                        fiatEpsMessage = if (report.faults.isEmpty()) {
+                            "Le calculateur EPS a repondu : aucun code retourne."
+                        } else {
+                            "${report.faults.size} defaut(s) EPS retournes par le calculateur."
+                        },
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                _state.update {
+                    it.copy(
+                        fiatEpsReport = null,
+                        fiatEpsMessage = "Diagnostic EPS non confirme.",
+                        errorMessage = friendlyError(error, "Lecture direction Fiat"),
+                    )
+                }
+            } finally {
+                // Do not leave the adapter with a manufacturer-specific header/protocol.
+                val recovered = withContext(NonCancellable) {
+                    try {
+                        val info = client.initializeAdapterOnly()
+                        _state.update {
+                            it.copy(
+                                adapterIdentity = info.identity,
+                                adapterVoltage = info.adapterVoltage,
+                                protocol = info.protocol,
+                            )
+                        }
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                _state.update {
+                    it.copy(
+                        isBusy = false,
+                        connectionState = if (recovered) ConnectionState.CONNECTED else ConnectionState.ERROR,
+                        errorMessage = if (!recovered) {
+                            "L'adaptateur ELM327 n'a pas pu etre reinitialise. Reconnecte-le."
+                        } else it.errorMessage,
+                    )
+                }
+            }
+        }
+    }
+
     fun clearCodes() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.vehicleProfile != VehicleProfile.GENERIC ||
+            _state.value.continuousClearEnabled || _state.value.isBusy
+        ) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
@@ -270,6 +510,8 @@ class ObdViewModel(
     }
 
     fun setContinuousClearEnabled(enabled: Boolean) {
+        if (enabled && _state.value.vehicleProfile != VehicleProfile.GENERIC) return
+        if (enabled) stopVoltageMonitoring()
         prefs.edit()
             .putBoolean(ObdPrefs.CONTINUOUS_CLEAR, enabled)
             .apply()
@@ -283,6 +525,7 @@ class ObdViewModel(
         }
 
         if (!enabled && hasBluetoothPermission()) {
+            startVoltageMonitoring()
             viewModelScope.launch {
                 delay(500)
                 refreshPairedAdapters(autoReconnect = true)
@@ -298,9 +541,11 @@ class ObdViewModel(
     }
 
     private fun refreshContinuousState() {
+        val enabled = prefs.getBoolean(ObdPrefs.CONTINUOUS_CLEAR, false)
+        if (enabled) stopVoltageMonitoring()
         _state.update {
             it.copy(
-                continuousClearEnabled = prefs.getBoolean(ObdPrefs.CONTINUOUS_CLEAR, false),
+                continuousClearEnabled = enabled,
                 continuousClearLastRunMs = prefs.getLong(ObdPrefs.CONTINUOUS_LAST_RUN, 0L).takeIf { value -> value > 0L },
                 continuousClearError = prefs.getString(ObdPrefs.CONTINUOUS_LAST_ERROR, null),
             )
