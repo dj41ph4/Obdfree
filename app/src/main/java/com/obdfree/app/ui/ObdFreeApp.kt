@@ -88,6 +88,7 @@ fun ObdFreeApp(
     onSelectAdapter: (BluetoothAdapterItem) -> Unit,
     onConnect: () -> Unit,
     onScan: () -> Unit,
+    onScanFiatEps: () -> Unit,
     onClearCodes: () -> Unit,
     onContinuousClearChanged: (Boolean) -> Unit,
     continuousWarningAccepted: () -> Boolean,
@@ -171,6 +172,13 @@ fun ObdFreeApp(
                         fontWeight = FontWeight.Black,
                     )
                 }
+            }
+
+            item {
+                FiatPanda169EpsCard(
+                    state = state,
+                    onScan = onScanFiatEps,
+                )
             }
 
             item {
@@ -487,6 +495,89 @@ private fun AdapterRememberedRow(onChooseAdapter: () -> Unit, name: String, cont
             )
         }
         Text("Changer", color = Electric, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun FiatPanda169EpsCard(
+    state: DiagnosticUiState,
+    onScan: () -> Unit,
+) {
+    GlassPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                "Fiat Panda II (169) · Direction Delphi",
+                color = TextPrimary,
+                fontWeight = FontWeight.Black,
+                fontSize = 16.sp,
+            )
+            Text(
+                "2008 / 2009 · lecture experimentale de la direction assistee electrique. " +
+                    "ELM327 K-Line et adaptateur vert A1 (broche 9) requis. " +
+                    "Compatibilite du calculateur a confirmer sur le vehicule.",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+            Button(
+                onClick = onScan,
+                enabled = state.connectionState == ConnectionState.CONNECTED &&
+                    !state.isBusy && !state.continuousClearEnabled,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(15.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Electric,
+                    contentColor = DeepInk,
+                    disabledContainerColor = Electric.copy(alpha = 0.12f),
+                    disabledContentColor = TextSecondary,
+                ),
+            ) {
+                Text("Lire les defauts de direction (lecture seule)", fontWeight = FontWeight.Bold)
+            }
+
+            state.fiatEpsMessage?.let { message ->
+                Text(message, color = TextSecondary, fontSize = 11.sp)
+            }
+
+            state.fiatEpsReport?.let { report ->
+                if (report.faults.isEmpty()) {
+                    Text(
+                        "Reponse EPS valide : aucun code renvoye par le calculateur.",
+                        color = Mint,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                    )
+                } else {
+                    report.faults.forEach { fault ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Danger.copy(alpha = 0.07f))
+                                .padding(10.dp),
+                        ) {
+                            Text(fault.code, color = Danger, fontWeight = FontWeight.Black)
+                            Text(
+                                "Statut constructeur brut : 0x${fault.statusHex} (non interprete)",
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Trame brute : ${report.rawResponse.take(400)}",
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                )
+            }
+            Text(
+                "Aucun effacement ni calibrage de direction. Un echec de liaison " +
+                    "ne signifie pas que le vehicule est sans defaut.",
+                color = TextSecondary,
+                fontSize = 10.sp,
+            )
+        }
     }
 }
 
