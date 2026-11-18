@@ -1,5 +1,7 @@
 package com.obdfree.app.model
 
+import com.obdfree.app.core.obd.FiatKwpReport
+
 data class BluetoothAdapterItem(
     val name: String,
     val address: String,
@@ -52,6 +54,8 @@ data class DiagnosticUiState(
     val protocol: String? = null,
     val troubleCodes: List<TroubleCode> = emptyList(),
     val clearHistory: ClearHistory? = null,
+    val fiatEpsReport: FiatKwpReport? = null,
+    val fiatEpsMessage: String? = null,
     val continuousClearEnabled: Boolean = false,
     val continuousClearLastRunMs: Long? = null,
     val continuousClearError: String? = null,
