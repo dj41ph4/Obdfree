@@ -34,6 +34,24 @@ mode remains the default for all vehicles.
 
 See [Fiat Panda 169 diagnostic coverage and validation](docs/FIAT_PANDA_169.md).
 
+## Live OBD supply-voltage monitor (experimental v0.0.7)
+
+While the app is open and connected, OBDfree samples the ELM327 `ATRV`
+input-voltage reading roughly once per second. A dedicated card shows the latest
+voltage, sampling state, last timestamp and a rolling 90-s sparkline with min/max.
+
+- No manufacturer ECU access is needed for `ATRV`; it works on either
+  universal OBD-II or the optional Fiat Panda 169/A1 profile.
+- Voltage sampling is paused during diagnostic operations, while continuous
+  DTC clearing is enabled and while the app is in the background.
+- This is an **indicative measurement at the ELM/OBD connector**, not a precision
+  measurement at the battery terminals, and **not** the EPS internal voltage.
+  Compare with a calibrated multimeter before concluding a voltage fault.
+- Failed reads show an explicit error and preserve the last timestamp;
+  stale values are **not** presented as fresh data.
+- ELM read/write operations are serialized to prevent competing Bluetooth
+  requests or a voltage read corrupting an OBD response.
+
 ## Diagnostic boundary
 
 Generic OBD-II primarily exposes emission-related powertrain diagnostics. ABS, SRS/airbag, body, coding, adaptations and service functions are manufacturer-specific and are **not** claimed as universal features.

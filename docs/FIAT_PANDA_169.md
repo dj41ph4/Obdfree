@@ -112,3 +112,28 @@ and obtain a professional steering-system diagnosis.
   https://www.scandoc.org/en/develop/elm327.html
 - KWP2000 general service definition, ISO 14230-3 (individual ECU exceptions
   can exist): https://www.iso.org/standard/23921.html
+
+
+## Live OBD power-supply monitor (0.0.7)
+
+After connecting, the new `Tension alimentation OBD` card samples `ATRV`
+around every 1000 ms (adapter response latency adds to the interval), while
+the application is foregrounded. There is a bounded rolling history of
+90 readings, a voltage curve, session min/max, last-sample time and a distinct
+unavailable/paused state.
+
+This reads the **ELM327 input**, so it does not require engine or Delphi EPS
+communication and works with the correct A1 wiring. Read operations are
+serialized by a Mutex over the whole ELM request/reply frame. Sampling pauses
+when scanning, on any failed connection and in the background. Continuous
+fault clearing remains exclusive.
+
+This trace cannot resolve millisecond alternator dropouts, and cheap clones
+may have inaccurate voltage dividers. Cross-check using a multimeter connected
+to the battery under load and, for the steering, ECU-specific data where
+available. No storage, cloud upload, long-running background service or
+new Android permissions are introduced for this feature.
+
+Reference: ELM327 AT RV command, input voltage measurement (uncalibrated
+accuracy depends on the specific interface):
+https://www.scandoc.org/en/develop/elm327.html
