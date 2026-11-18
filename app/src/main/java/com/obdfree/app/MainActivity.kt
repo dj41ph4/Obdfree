@@ -59,6 +59,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.setVoltageMonitoringActive(true)
+    }
+
+    override fun onStop() {
+        viewModel.setVoltageMonitoringActive(false)
+        super.onStop()
+    }
+
     private fun requestBluetoothPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             viewModel.onPermissionResult(true)
