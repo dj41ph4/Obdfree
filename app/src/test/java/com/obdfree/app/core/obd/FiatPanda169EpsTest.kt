@@ -53,9 +53,21 @@ class FiatPanda169EpsTest {
         val report = probe.readFaults()
         assertEquals("C1001", report.faults.single().code)
         assertEquals(
-            listOf("ATPC", "ATM0", "ATTP4", "ATIIA10", "ATSH8010F1", "ATH1", "ATSTFF", "ATSI", "1800FF00", "ATPC"),
+            listOf("ATPC", "ATSP4", "ATIIA10", "ATSH8010F1", "ATH1", "ATSTFF", "ATSI", "1800FF00", "ATPC"),
             sent,
         )
+    }
+
+    @Test fun closesSessionIfAdapterRejectsInitializationAddress() = runBlocking {
+        val sent = mutableListOf<String>()
+        val diag = FiatPanda169EpsDiagnostics { command, _ ->
+            sent += command
+            if (command == "ATIIA10") "?" else "OK"
+        }
+        var rejected = false
+        try { diag.readFaults() } catch (_: IllegalStateException) { rejected = true }
+        assertTrue(rejected)
+        assertEquals(listOf("ATPC", "ATSP4", "ATIIA10", "ATPC"), sent)
     }
 
     @Test fun closesSessionAfterFailedEcuResponse() = runBlocking {
