@@ -186,6 +186,7 @@ class ObdViewModel(
                     it.copy(
                         connectionState = ConnectionState.CONNECTED,
                         adapterIdentity = info.identity,
+                        adapterVoltage = info.adapterVoltage,
                         protocol = info.protocol,
                         isBusy = false,
                         statusMessage = "Connecté à ${adapter.name}",
@@ -301,6 +302,7 @@ class ObdViewModel(
                         _state.update {
                             it.copy(
                                 adapterIdentity = info.identity,
+                                adapterVoltage = info.adapterVoltage,
                                 protocol = info.protocol,
                             )
                         }
