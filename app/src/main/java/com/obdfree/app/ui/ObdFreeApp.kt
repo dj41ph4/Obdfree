@@ -70,6 +70,7 @@ import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
 import com.obdfree.app.model.DtcStatus
 import com.obdfree.app.model.TroubleCode
+import com.obdfree.app.model.VehicleProfile
 import com.obdfree.app.ui.theme.Danger
 import com.obdfree.app.ui.theme.DeepInk
 import com.obdfree.app.ui.theme.Electric
@@ -89,6 +90,7 @@ fun ObdFreeApp(
     onConnect: () -> Unit,
     onScan: () -> Unit,
     onScanFiatEps: () -> Unit,
+    onSelectVehicleProfile: (VehicleProfile) -> Unit,
     onClearCodes: () -> Unit,
     onContinuousClearChanged: (Boolean) -> Unit,
     continuousWarningAccepted: () -> Boolean,
@@ -175,10 +177,20 @@ fun ObdFreeApp(
             }
 
             item {
-                FiatPanda169EpsCard(
-                    state = state,
-                    onScan = onScanFiatEps,
+                VehicleProfileCard(
+                    profile = state.vehicleProfile,
+                    enabled = !state.isBusy && !state.continuousClearEnabled,
+                    onSelected = onSelectVehicleProfile,
                 )
+            }
+
+            if (state.vehicleProfile == VehicleProfile.FIAT_PANDA_169) {
+                item {
+                    FiatPanda169EpsCard(
+                        state = state,
+                        onScan = onScanFiatEps,
+                    )
+                }
             }
 
             item {
@@ -495,6 +507,57 @@ private fun AdapterRememberedRow(onChooseAdapter: () -> Unit, name: String, cont
             )
         }
         Text("Changer", color = Electric, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun VehicleProfileCard(
+    profile: VehicleProfile,
+    enabled: Boolean,
+    onSelected: (VehicleProfile) -> Unit,
+) {
+    GlassPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(
+                "Vehicule",
+                color = TextPrimary,
+                fontWeight = FontWeight.Black,
+                fontSize = 15.sp,
+            )
+            Text(
+                if (profile == VehicleProfile.GENERIC) {
+                    "Mode OBD-II universel (moteur / emissions)."
+                } else {
+                    "Profil Fiat Panda II (169, 2003-2012) : diagnostic special direction."
+                },
+                color = TextSecondary,
+                fontSize = 11.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { onSelected(VehicleProfile.GENERIC) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        "Universel",
+                        color = if (profile == VehicleProfile.GENERIC) Mint else TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+                OutlinedButton(
+                    onClick = { onSelected(VehicleProfile.FIAT_PANDA_169) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        "Panda 169",
+                        color = if (profile == VehicleProfile.FIAT_PANDA_169) Mint else TextSecondary,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
+        }
     }
 }
 
