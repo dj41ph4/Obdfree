@@ -19,11 +19,13 @@ data class FiatKwpReport(
 
 object FiatKwpDtcDecoder {
     fun decode(raw: String): FiatKwpReport {
-        if (raw.contains("NO DATA", ignoreCase = true) ||
-            raw.contains("UNABLE TO CONNECT", ignoreCase = true) ||
-            raw.contains("BUS INIT", ignoreCase = true)
+        val upper = raw.uppercase()
+        if (listOf(
+                "NO DATA", "UNABLE TO CONNECT", "BUS INIT", "BUS ERROR",
+                "RX ERROR", "DATA ERROR", "BUFFER FULL", "STOPPED",
+            ).any(upper::contains)
         ) {
-            error("Aucune reponse du calculateur EPS. Verifie le contact, l'adresse et l'adaptateur A1 (broche 9).")
+            error("Lecture EPS invalide ou incomplete : verifie la liaison et l'adaptateur A1 (broche 9).")
         }
 
         val packets = raw.lineSequence().mapNotNull(::decodeLine).toList()
@@ -59,8 +61,13 @@ object FiatKwpDtcDecoder {
         val bytes = compact.chunked(2).map { it.toIntOrNull(16) ?: return null }
         if (bytes.first() == 0x58 || bytes.first() == 0x7F) return bytes
 
-        // KWP 3-byte addressing: format, destination (F1), source (ECU).
-        if (bytes.size < 5 || (bytes[0] and 0xC0) != 0x80 || bytes[1] != 0xF1) return null
+        // Physically addressed KWP response, destined to tester F1.
+        // Source 10 is ONLY the provisional ECU address selected by the
+        // diagnostic module. Ignore other senders to avoid false "0 faults".
+        if (bytes.size < 5 || (bytes[0] and 0xC0) != 0x80 ||
+            bytes[1] != 0xF1 || bytes[2] != 0x10
+        ) return null
+
         var payloadLength = bytes[0] and 0x3F
         var offset = 3
         if (payloadLength == 0) {
@@ -68,8 +75,19 @@ object FiatKwpDtcDecoder {
             payloadLength = bytes[3]
             offset = 4
         }
-        if (payloadLength <= 0 || bytes.size < offset + payloadLength) return null
-        return bytes.subList(offset, offset + payloadLength)
+        if (payloadLength <= 0) return null
+        val expectedWithoutChecksum = offset + payloadLength
+        if (bytes.size != expectedWithoutChecksum &&
+            bytes.size != expectedWithoutChecksum + 1
+        ) return null
+
+        // Certain ELMs include KWP checksum when ATH1 is enabled, others
+        // strip it. If present, never silently accept corrupted frames.
+        if (bytes.size == expectedWithoutChecksum + 1) {
+            val checksum = bytes.dropLast(1).sum() and 0xFF
+            if (checksum != bytes.last()) return null
+        }
+        return bytes.subList(offset, expectedWithoutChecksum)
     }
 
     internal fun decodeDtc(first: Int, second: Int): String {
