@@ -12,10 +12,13 @@ import androidx.lifecycle.viewModelScope
 import com.obdfree.app.core.ObdPrefs
 import com.obdfree.app.core.ObdRuntime
 import com.obdfree.app.core.obd.DtcKnowledgeService
+import com.obdfree.app.core.obd.FiatPanda169EpsDiagnostics
 import com.obdfree.app.model.BluetoothAdapterItem
 import com.obdfree.app.model.ConnectionState
 import com.obdfree.app.model.DiagnosticUiState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -222,6 +225,81 @@ class ObdViewModel(
                 }
             } catch (error: Throwable) {
                 setError(error, "Lecture impossible")
+            }
+        }
+    }
+
+    /**
+     * Experimental Panda 169 Delphi EPS diagnostics on OBD pin 9 via A1 adapter.
+     * Strictly read-only. Never run alongside generic requests or continuous clear.
+     * Reinitialise the generic ELM session after the manufacturer session.
+     */
+    fun scanFiatEps() {
+        if (_state.value.continuousClearEnabled ||
+            _state.value.connectionState != ConnectionState.CONNECTED ||
+            _state.value.isBusy
+        ) return
+
+        viewModelScope.launch {
+            _state.update {
+                it.copy(
+                    isBusy = true,
+                    fiatEpsReport = null,
+                    fiatEpsMessage = "Lecture direction Delphi en cours…",
+                    errorMessage = null,
+                )
+            }
+
+            try {
+                val diagnostic = FiatPanda169EpsDiagnostics { request, timeout ->
+                    client.command(request, timeout)
+                }
+                val report = diagnostic.readFaults()
+                _state.update {
+                    it.copy(
+                        fiatEpsReport = report,
+                        fiatEpsMessage = if (report.faults.isEmpty()) {
+                            "Le calculateur EPS a repondu : aucun code retourne."
+                        } else {
+                            "${report.faults.size} defaut(s) EPS retournes par le calculateur."
+                        },
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                _state.update {
+                    it.copy(
+                        fiatEpsReport = null,
+                        fiatEpsMessage = "Diagnostic EPS non confirme.",
+                        errorMessage = friendlyError(error, "Lecture direction Fiat"),
+                    )
+                }
+            } finally {
+                // Do not leave the adapter with a manufacturer-specific header/protocol.
+                val recovered = withContext(NonCancellable) {
+                    try {
+                        val info = client.initialize()
+                        _state.update {
+                            it.copy(
+                                adapterIdentity = info.identity,
+                                protocol = info.protocol,
+                            )
+                        }
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                _state.update {
+                    it.copy(
+                        isBusy = false,
+                        connectionState = if (recovered) ConnectionState.CONNECTED else ConnectionState.ERROR,
+                        errorMessage = if (!recovered) {
+                            "Session OBD-II non restauree apres la lecture EPS. Reconnecte ton adaptateur."
+                        } else it.errorMessage,
+                    )
+                }
             }
         }
     }
