@@ -15,10 +15,10 @@ import org.junit.Test
 
 class ElmVoltageTest {
     @Test fun acceptsRealistic12And24VoltReadings() {
-        assertEquals(12.6f, ElmVoltage.parse("12.6V"), 0.01f)
-        assertEquals(14.25f, ElmVoltage.parse("14,25 V"), 0.01f)
-        assertEquals(28.1f, ElmVoltage.parse("28.1V"), 0.01f)
-        assertEquals(12.5f, ElmVoltage.parse("OK\n12.5V"), 0.01f)
+        assertEquals(12.6f, requireNotNull(ElmVoltage.parse("12.6V")), 0.01f)
+        assertEquals(14.25f, requireNotNull(ElmVoltage.parse("14,25 V")), 0.01f)
+        assertEquals(28.1f, requireNotNull(ElmVoltage.parse("28.1V")), 0.01f)
+        assertEquals(12.5f, requireNotNull(ElmVoltage.parse("OK\n12.5V")), 0.01f)
     }
 
     @Test fun rejectsMalformedAndDangerouslyMisleadingReadings() {
