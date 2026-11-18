@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
                     onSelectAdapter = viewModel::selectAdapter,
                     onConnect = viewModel::connect,
                     onScan = viewModel::scan,
+                    onScanFiatEps = viewModel::scanFiatEps,
                     onClearCodes = viewModel::clearCodes,
                     onContinuousClearChanged = ::setContinuousClear,
                     continuousWarningAccepted = viewModel::continuousWarningAccepted,
