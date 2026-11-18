@@ -634,6 +634,13 @@ private fun FiatPanda169EpsCard(
                     fontSize = 10.sp,
                 )
             }
+            state.adapterVoltage?.let { voltage ->
+                Text(
+                    "Tension mesuree sur la prise OBD : %.1f V (indicative, pas un test de batterie sous charge).".format(voltage),
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                )
+            }
             Text(
                 "Aucun effacement ni calibrage de direction. Un echec de liaison " +
                     "ne signifie pas que le vehicule est sans defaut.",
