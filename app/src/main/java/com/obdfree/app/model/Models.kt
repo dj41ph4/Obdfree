@@ -15,6 +15,11 @@ enum class ConnectionState {
     ERROR,
 }
 
+enum class VehicleProfile {
+    GENERIC,
+    FIAT_PANDA_169,
+}
+
 enum class DtcStatus {
     STORED,
     PENDING,
@@ -46,6 +51,7 @@ data class LiveDataSnapshot(
 
 data class DiagnosticUiState(
     val permissionGranted: Boolean = false,
+    val vehicleProfile: VehicleProfile = VehicleProfile.GENERIC,
     val bluetoothAvailable: Boolean = true,
     val pairedAdapters: List<BluetoothAdapterItem> = emptyList(),
     val selectedAdapter: BluetoothAdapterItem? = null,
