@@ -73,15 +73,38 @@ class ObdViewModel(
     }
 
     fun selectVehicleProfile(profile: VehicleProfile) {
-        if (_state.value.isBusy || _state.value.continuousClearEnabled) return
-        prefs.edit().putString(ObdPrefs.VEHICLE_PROFILE, profile.name).apply()
-        _state.update {
-            it.copy(
-                vehicleProfile = profile,
-                fiatEpsReport = null,
-                fiatEpsMessage = null,
-                errorMessage = null,
-            )
+        if (_state.value.isBusy || _state.value.continuousClearEnabled ||
+            _state.value.vehicleProfile == profile
+        ) return
+
+        // Changing the physical OBD pin requires reconnecting the ELM session.
+        // Avoid treating a previous generic engine connection as an EPS connection.
+        _state.update { it.copy(isBusy = true, statusMessage = "Changement de profil…") }
+        viewModelScope.launch {
+            try {
+                transport.disconnect()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Continue: the next connect will create/reset a new ELM session.
+            }
+            prefs.edit().putString(ObdPrefs.VEHICLE_PROFILE, profile.name).apply()
+            _state.update {
+                it.copy(
+                    vehicleProfile = profile,
+                    connectionState = ConnectionState.DISCONNECTED,
+                    adapterIdentity = null,
+                    adapterVoltage = null,
+                    protocol = null,
+                    troubleCodes = emptyList(),
+                    clearHistory = null,
+                    fiatEpsReport = null,
+                    fiatEpsMessage = null,
+                    isBusy = false,
+                    statusMessage = "Profil change. Adapte le cable avant de reconnecter.",
+                    errorMessage = null,
+                )
+            }
         }
     }
 
@@ -148,7 +171,7 @@ class ObdViewModel(
     }
 
     fun connect() {
-        if (_state.value.continuousClearEnabled) return
+        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
 
         val adapter = _state.value.selectedAdapter
             ?: return setError(IllegalStateException("Choisis un adaptateur Bluetooth"), "Connexion")
@@ -179,7 +202,13 @@ class ObdViewModel(
                     )
                 }
 
-                val info = client.initialize()
+                val profile = _state.value.vehicleProfile
+                val info = if (profile == VehicleProfile.FIAT_PANDA_169) {
+                    // A1 cable: engine pin 7 is not routed; do not probe the engine.
+                    client.initializeAdapterOnly()
+                } else {
+                    client.initialize()
+                }
                 prefs.edit().putString(ObdPrefs.LAST_DEVICE, adapter.address).apply()
 
                 _state.update {
@@ -189,7 +218,11 @@ class ObdViewModel(
                         adapterVoltage = info.adapterVoltage,
                         protocol = info.protocol,
                         isBusy = false,
-                        statusMessage = "Connecté à ${adapter.name}",
+                        statusMessage = if (profile == VehicleProfile.FIAT_PANDA_169) {
+                            "ELM pret, calculateur EPS non encore verifie"
+                        } else {
+                            "Connecté à ${adapter.name}"
+                        },
                         errorMessage = null,
                     )
                 }
@@ -210,7 +243,9 @@ class ObdViewModel(
     }
 
     fun scan() {
-        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
+        if (_state.value.vehicleProfile != VehicleProfile.GENERIC ||
+            _state.value.continuousClearEnabled || _state.value.isBusy
+        ) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
@@ -250,7 +285,7 @@ class ObdViewModel(
     /**
      * Experimental Panda 169 Delphi EPS diagnostics on OBD pin 9 via A1 adapter.
      * Strictly read-only. Never run alongside generic requests or continuous clear.
-     * Reinitialise the generic ELM session after the manufacturer session.
+     * Reinitialise the ELM adapter only after the manufacturer session (A1 cable).
      */
     fun scanFiatEps() {
         if (_state.value.continuousClearEnabled ||
@@ -298,7 +333,7 @@ class ObdViewModel(
                 // Do not leave the adapter with a manufacturer-specific header/protocol.
                 val recovered = withContext(NonCancellable) {
                     try {
-                        val info = client.initialize()
+                        val info = client.initializeAdapterOnly()
                         _state.update {
                             it.copy(
                                 adapterIdentity = info.identity,
@@ -316,7 +351,7 @@ class ObdViewModel(
                         isBusy = false,
                         connectionState = if (recovered) ConnectionState.CONNECTED else ConnectionState.ERROR,
                         errorMessage = if (!recovered) {
-                            "Session OBD-II non restauree apres la lecture EPS. Reconnecte ton adaptateur."
+                            "L'adaptateur ELM327 n'a pas pu etre reinitialise. Reconnecte-le."
                         } else it.errorMessage,
                     )
                 }
@@ -325,7 +360,9 @@ class ObdViewModel(
     }
 
     fun clearCodes() {
-        if (_state.value.continuousClearEnabled || _state.value.isBusy) return
+        if (_state.value.vehicleProfile != VehicleProfile.GENERIC ||
+            _state.value.continuousClearEnabled || _state.value.isBusy
+        ) return
         if (_state.value.connectionState != ConnectionState.CONNECTED) return
 
         viewModelScope.launch {
@@ -368,6 +405,7 @@ class ObdViewModel(
     }
 
     fun setContinuousClearEnabled(enabled: Boolean) {
+        if (enabled && _state.value.vehicleProfile != VehicleProfile.GENERIC) return
         prefs.edit()
             .putBoolean(ObdPrefs.CONTINUOUS_CLEAR, enabled)
             .apply()
