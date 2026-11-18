@@ -24,18 +24,32 @@ class Elm327Client(
     private var adapterVoltage: Float? = null
     private var recovering = false
 
-    suspend fun initialize(): ElmInitialization {
+    /**
+     * Bluetooth/ELM handshake only: deliberately does not probe engine OBD-II.
+     * Required when an A1 K-line adapter routes pin 7 to the Panda EPS pin 9.
+     * A successful handshake is NOT proof that a vehicle ECU can be reached.
+     */
+    suspend fun initializeAdapterOnly(): ElmInitialization {
         val identity = command("ATZ", timeoutMs = 7_000)
         delay(700)
-
         configureAdapter()
+        protocolNumber = null
+        protocolDescription = null
         adapterVoltage = readAdapterVoltage()
-
-        establishVehicleProtocol()
-        refreshProtocolIdentity()
 
         return ElmInitialization(
             identity = identity.cleanHumanResponse().ifBlank { "ELM327 compatible" },
+            protocol = null,
+            protocolNumber = null,
+            adapterVoltage = adapterVoltage,
+        )
+    }
+
+    suspend fun initialize(): ElmInitialization {
+        val adapter = initializeAdapterOnly()
+        establishVehicleProtocol()
+        refreshProtocolIdentity()
+        return adapter.copy(
             protocol = protocolDescription,
             protocolNumber = protocolNumber,
             adapterVoltage = adapterVoltage,
