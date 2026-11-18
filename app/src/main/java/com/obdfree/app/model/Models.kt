@@ -57,6 +57,7 @@ data class DiagnosticUiState(
     val selectedAdapter: BluetoothAdapterItem? = null,
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val adapterIdentity: String? = null,
+    val adapterVoltage: Float? = null,
     val protocol: String? = null,
     val troubleCodes: List<TroubleCode> = emptyList(),
     val clearHistory: ClearHistory? = null,
