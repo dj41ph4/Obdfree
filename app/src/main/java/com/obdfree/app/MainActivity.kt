@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
                     onConnect = viewModel::connect,
                     onScan = viewModel::scan,
                     onScanFiatEps = viewModel::scanFiatEps,
+                    onSelectVehicleProfile = viewModel::selectVehicleProfile,
                     onClearCodes = viewModel::clearCodes,
                     onContinuousClearChanged = ::setContinuousClear,
                     continuousWarningAccepted = viewModel::continuousWarningAccepted,
