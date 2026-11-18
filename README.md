@@ -23,6 +23,17 @@ OBDfree is a free, privacy-first Android OBD-II diagnostic app built with Kotlin
 7. Clear emission-related diagnostic information with Mode 04 after confirmation.
 8. Read basic live data: RPM, speed, coolant temperature and throttle position.
 
+## Experimental Fiat Panda 169 profile (2008 / 2009 included)
+
+OBDfree now offers an **optional Panda II (169)** vehicle profile with an
+**experimental, read-only** Delphi electric steering KWP2000 diagnostic path.
+It requires an ELM327 with proper K-line support and a **green A1 adapter
+(to OBD pin 9)**. This is not a validated full-vehicle scan: ABS, SRS, body
+modules and Fiat special functions are not implemented. The generic OBD
+mode remains the default for all vehicles.
+
+See [Fiat Panda 169 diagnostic coverage and validation](docs/FIAT_PANDA_169.md).
+
 ## Diagnostic boundary
 
 Generic OBD-II primarily exposes emission-related powertrain diagnostics. ABS, SRS/airbag, body, coding, adaptations and service functions are manufacturer-specific and are **not** claimed as universal features.
