@@ -111,4 +111,4 @@ and obtain a professional steering-system diagnosis.
 - ELM327 AT command reference:
   https://www.scandoc.org/en/develop/elm327.html
 - KWP2000 general service definition, ISO 14230-3 (individual ECU exceptions
-  can exist): https://www.iso.org/standard/20687.html
+  can exist): https://www.iso.org/standard/23921.html
